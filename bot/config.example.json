@@ -1,0 +1,64 @@
+﻿{
+  "token": "YOUR_BOT_TOKEN",
+  "clientId": "YOUR_CLIENT_ID",
+  "guildId": "YOUR_GUILD_ID",
+  "logPath": "./vip.log",
+  "checkIntervalSeconds": 60,
+  "notifyBeforeHours": [24],
+  "language": "ru",
+  "auditChannelId": "DISCORD_CHANNEL_ID",
+  "history": {
+    "pollMs": 3000,
+    "serverName": "SERVER_NAME",
+    "feeds": [
+      {
+        "name": "S1",
+        "server": "S1",
+        "path": "$profile:history.json",
+        "channelId": "DISCORD_CHANNEL_ID"
+      },
+      {
+        "name": "S2",
+        "server": "S2",
+        "path": "$profile:history.json",
+        "channelId": "DISCORD_CHANNEL_ID"
+      }
+    ]
+  },
+  "api": {
+    "enabled": true,
+    "host": "0.0.0.0",
+    "port": 8787,
+    "token": "CHANGE_ME",
+    "allowedOrigins": ["http://localhost:5173", "null"],
+    "maxLogLines": 500,
+    "maxPageSize": 100
+  },
+  "cftools": {
+    "applicationId": "6894c4ecde7a7504709e60c0",
+    "applicationSecret": "bv4A6v/BWwMgn3n+Sk0hJm99J9zBJCyAROIr/FUAiT0=",
+    "serverApiId": "00ebc10b-efbe-437a-bf0f-7fde12ee53ff"
+  },
+  "primaryServer": "S1",
+  "servers": [
+    {
+      "name": "S1",
+      "type": "local",
+      "profilePath": "P:/Path/To/ServerProfile1",
+      "whitelistPath": "$profile:SWG_MODS/SWG_Loadout/settings.json"
+    },
+    {
+      "name": "S2",
+      "type": "ftp",
+      "profilePath": "/profiles/Server2",
+      "whitelistPath": "$profile:SWG_MODS/SWG_Loadout/settings.json",
+      "ftp": {
+        "host": "ftp.example.com",
+        "port": 21,
+        "user": "ftp_user",
+        "password": "ftp_password",
+        "secure": false
+      }
+    }
+  ]
+}

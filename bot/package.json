@@ -1,0 +1,22 @@
+{
+  "name": "dayz-vip-bot",
+  "version": "1.0.0",
+  "description": "Discord bot to manage DayZ VIP whitelist",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=16.9.0"
+  },
+  "dependencies": {
+    "basic-ftp": "^5.0.5",
+    "cftools-sdk": "^3.6.0",
+    "discord.js": "^14.16.0",
+    "express": "^4.22.1"
+  },
+  "devDependencies": {
+    "pkg": "^5.8.1"
+  }
+}
