@@ -14,6 +14,7 @@ const { Readable, Writable } = require('stream');
 const ftp = require('basic-ftp');
 const express = require('express');
 const {
+  AttachmentBuilder,
   Client,
   EmbedBuilder,
   GatewayIntentBits,
@@ -371,6 +372,8 @@ const GIVEVIP_COMMAND = new SlashCommandBuilder()
 
 const config = loadConfig();
 const DEFAULT_LANGUAGE = normalizeLanguage(config.language, 'ru');
+const LEADERBOARD_CONFIG = normalizeLeaderboardConfig(config.leaderboard);
+const LEADERBOARD_ENABLED = LEADERBOARD_CONFIG.enabled;
 const AUDIT_LABELS = AUDIT_LABELS_BY_LANG[DEFAULT_LANGUAGE] || AUDIT_LABELS_RU;
 const AUDIT_FIELDS = AUDIT_FIELDS_BY_LANG[DEFAULT_LANGUAGE] || AUDIT_FIELDS_RU;
 const AUDIT_FOREVER = AUDIT_FOREVER_BY_LANG[DEFAULT_LANGUAGE] || 'РЅР°РІСЃРµРіРґР°';
@@ -406,11 +409,17 @@ let db = null;
 let opQueue = Promise.resolve();
 let primaryGuild = null;
 let auditChannel = null;
+let leaderboardGenerator = null;
 const invalidLinks = new Set();
 const roleChangeSkips = new Set();
 
+const clientIntents = [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers];
+if (LEADERBOARD_ENABLED) {
+  clientIntents.push(GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent);
+}
+
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
+  intents: clientIntents,
   partials: [Partials.GuildMember, Partials.User],
 });
 
@@ -472,6 +481,11 @@ function logStartupInfo(config, servers, primaryServer) {
       `[startup] api host=${config.api.host} port=${config.api.port} token=${maskSecret(config.api.token)}`
     );
   }
+  if (LEADERBOARD_ENABLED) {
+    console.log(
+      `[startup] leaderboard enabled=true command=${LEADERBOARD_CONFIG.command} autoPostChannelId=${LEADERBOARD_CONFIG.autoPostChannelId || '-'}`
+    );
+  }
 }
 
 function normalizeConfig(raw) {
@@ -515,6 +529,25 @@ function normalizeConfig(raw) {
   }
   config.api = api;
   return config;
+}
+
+function normalizeLeaderboardConfig(raw) {
+  const source = raw && typeof raw === 'object' ? raw : {};
+  return {
+    enabled: Boolean(source.enabled),
+    command: String(source.command || '!top').trim(),
+    updateCommand: String(source.updateCommand || '!update-top').trim(),
+    autoPostChannelId: source.autoPostChannelId ? String(source.autoPostChannelId).trim() : '',
+    autoPostIntervalMs: Math.max(60000, Number(source.autoPostIntervalMs) || 3600000),
+    cfCloudApiKey: source.cfCloudApiKey || '',
+    cfCloudServerId: source.cfCloudServerId || '',
+    cfCloudApiUrl: source.cfCloudApiUrl || 'https://api.cftools.cloud',
+    topCount: Math.max(1, Math.min(50, Number(source.topCount) || 10)),
+    updateIntervalMs: Math.max(60000, Number(source.updateIntervalMs) || 300000),
+    logoPath: source.logoPath || './assets/logo.png',
+    backgroundPath: source.backgroundPath || './assets/background.png',
+    fontPath: source.fontPath || null,
+  };
 }
 
 function buildServers(config) {
@@ -2345,6 +2378,117 @@ async function runExpirationCheck() {
   }
 }
 
+function hasAdminPermissionForMessage(message) {
+  return Boolean(message?.member?.permissions?.has(PermissionFlagsBits.Administrator));
+}
+
+async function initializeLeaderboardModule() {
+  if (!LEADERBOARD_ENABLED) {
+    return;
+  }
+  if (!LEADERBOARD_CONFIG.cfCloudApiKey || !LEADERBOARD_CONFIG.cfCloudServerId) {
+    console.warn('[leaderboard] Missing cfCloudApiKey or cfCloudServerId. Module disabled.');
+    return;
+  }
+
+  let LeaderboardGenerator;
+  try {
+    LeaderboardGenerator = require('./leaderboard/leaderboard-generator');
+  } catch (err) {
+    console.warn('[leaderboard] Failed to load module:', err?.message || err);
+    console.warn('[leaderboard] Install missing deps (example: npm i canvas) and restart.');
+    return;
+  }
+
+  if (LeaderboardGenerator && LeaderboardGenerator.default) {
+    LeaderboardGenerator = LeaderboardGenerator.default;
+  }
+  if (typeof LeaderboardGenerator !== 'function') {
+    console.warn('[leaderboard] Module export is invalid. Expected class/function.');
+    return;
+  }
+
+  leaderboardGenerator = new LeaderboardGenerator({
+    cfCloudApiKey: LEADERBOARD_CONFIG.cfCloudApiKey,
+    cfCloudServerId: LEADERBOARD_CONFIG.cfCloudServerId,
+    cfCloudApiUrl: LEADERBOARD_CONFIG.cfCloudApiUrl,
+    logoPath: LEADERBOARD_CONFIG.logoPath,
+    backgroundPath: LEADERBOARD_CONFIG.backgroundPath,
+    fontPath: LEADERBOARD_CONFIG.fontPath,
+    topCount: LEADERBOARD_CONFIG.topCount,
+    updateInterval: LEADERBOARD_CONFIG.updateIntervalMs,
+  });
+
+  if (typeof leaderboardGenerator.registerCustomFont === 'function') {
+    leaderboardGenerator.registerCustomFont();
+  }
+
+  if (LEADERBOARD_CONFIG.autoPostChannelId) {
+    const channel = await client.channels.fetch(LEADERBOARD_CONFIG.autoPostChannelId).catch(() => null);
+    if (!channel || !channel.isTextBased()) {
+      console.warn('[leaderboard] Auto-post channel not found or not text-based.');
+    } else if (typeof leaderboardGenerator.autoPostLeaderboard === 'function') {
+      leaderboardGenerator.autoPostLeaderboard(channel, LEADERBOARD_CONFIG.autoPostIntervalMs);
+      console.log('[leaderboard] Auto-post started.');
+    }
+  }
+}
+
+async function handleLeaderboardMessage(message) {
+  if (!LEADERBOARD_ENABLED || !leaderboardGenerator) {
+    return;
+  }
+  if (!message || !message.content || message.author?.bot || !message.inGuild()) {
+    return;
+  }
+
+  const content = message.content.trim();
+  if (!content) {
+    return;
+  }
+
+  const command = LEADERBOARD_CONFIG.command.toLowerCase();
+  const updateCommand = LEADERBOARD_CONFIG.updateCommand.toLowerCase();
+  const lower = content.toLowerCase();
+
+  if (lower.startsWith(updateCommand)) {
+    if (!hasAdminPermissionForMessage(message)) {
+      await message.reply('No permission.');
+      return;
+    }
+    await message.channel.sendTyping();
+    try {
+      const imageBuffer = await leaderboardGenerator.updateLeaderboard(true);
+      const attachment = new AttachmentBuilder(imageBuffer, { name: 'leaderboard.png' });
+      await message.reply({
+        content: 'Leaderboard refreshed.',
+        files: [attachment],
+      });
+    } catch (err) {
+      console.warn('[leaderboard] update command failed:', err?.message || err);
+      await message.reply('Failed to update leaderboard.');
+    }
+    return;
+  }
+
+  if (!lower.startsWith(command)) {
+    return;
+  }
+
+  await message.channel.sendTyping();
+  try {
+    const imageBuffer = await leaderboardGenerator.updateLeaderboard(false);
+    const attachment = new AttachmentBuilder(imageBuffer, { name: 'leaderboard.png' });
+    await message.reply({
+      content: 'Top players:',
+      files: [attachment],
+    });
+  } catch (err) {
+    console.warn('[leaderboard] top command failed:', err?.message || err);
+    await message.reply('Failed to load leaderboard.');
+  }
+}
+
 async function registerCommands() {
   const rest = new REST({ version: '10' }).setToken(config.token);
   await rest.put(Routes.applicationGuildCommands(config.clientId, config.guildId), {
@@ -2375,10 +2519,28 @@ client.once('ready', async () => {
     process.exit(1);
   }
 
-  startHistoryFeed(client, config);
+  try {
+    startHistoryFeed(client, config);
+  } catch (err) {
+    console.error('History feed init failed:', err?.message || err);
+  }
+
+  try {
+    await initializeLeaderboardModule();
+  } catch (err) {
+    console.error('Leaderboard init failed:', err?.message || err);
+  }
 
   await enqueueOperation(runExpirationCheck);
   setInterval(() => enqueueOperation(runExpirationCheck), CHECK_INTERVAL_MS);
+});
+
+client.on('messageCreate', async (message) => {
+  try {
+    await handleLeaderboardMessage(message);
+  } catch (err) {
+    console.warn('[leaderboard] Message handler failed:', err?.message || err);
+  }
 });
 
 client.on('guildMemberUpdate', async (oldMember, newMember) => {
@@ -3171,17 +3333,3 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 client.login(config.token);
-
-
-
-
-
-
-
-
-
-
-
-
-
-

@@ -72,6 +72,17 @@ function buildEntryKey(entry) {
   ].join('|');
 }
 
+function pruneSentKeys(sentKeys, maxSize) {
+  const target = Number.isFinite(Number(maxSize)) ? Math.max(1, Number(maxSize)) : 1000;
+  while (sentKeys.size > target) {
+    const oldest = sentKeys.values().next().value;
+    if (!oldest) {
+      break;
+    }
+    sentKeys.delete(oldest);
+  }
+}
+
 function normalizePollMs(value, fallback) {
   const num = Number(value);
   if (Number.isFinite(num) && num > 0) {
@@ -330,6 +341,8 @@ function startHistoryFeed(client, config) {
       continue;
     }
     const pollMs = normalizePollMs(feed?.pollMs, DEFAULT_POLL_MS);
+    const historyWindow = Math.max(1, Number(feed?.historyWindow) || 50);
+    const maxTrackedKeys = Math.max(historyWindow, Number(feed?.maxTrackedKeys) || historyWindow * 20);
     const statePath = resolveStatePath(feed, isMulti, index);
 
     let statePromise = loadState(statePath);
@@ -353,18 +366,25 @@ function startHistoryFeed(client, config) {
           return;
         }
 
+        const recentEntries = history.slice(-historyWindow);
+
         if (state.lastLen === null) {
           state.lastLen = history.length;
+          for (const entry of recentEntries) {
+            const key = buildEntryKey(entry);
+            if (key) {
+              state.sentKeys.add(key);
+            }
+          }
+          pruneSentKeys(state.sentKeys, maxTrackedKeys);
           await saveState(statePath, state);
           return;
         }
 
-        let entries = [];
-        if (history.length < state.lastLen) {
-          entries = history.slice(-50);
-        } else if (history.length > state.lastLen) {
-          entries = history.slice(state.lastLen);
-        }
+        const entries = recentEntries.filter((entry) => {
+          const key = buildEntryKey(entry);
+          return key && !state.sentKeys.has(key);
+        });
 
         if (entries.length === 0) {
           state.lastLen = history.length;
@@ -389,6 +409,7 @@ function startHistoryFeed(client, config) {
         }
 
         state.lastLen = history.length;
+        pruneSentKeys(state.sentKeys, maxTrackedKeys);
         await saveState(statePath, state);
       } catch (err) {
         console.warn('[history-feed] Tick failed:', err);
