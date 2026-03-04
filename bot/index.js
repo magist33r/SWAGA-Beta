@@ -48,6 +48,10 @@ const VIP_ROLES = new Map([
 ]);
 const VIP_ROLE_NAMES = new Set(VIP_ROLES.keys());
 const NEWERA_ROLE_NAME = 'newera';
+const MEDIA_ROLE_NAME = 'media';
+const MEMBER_ROLE_NAMES = [':white_check_mark:', '✅'];
+const EVERYONE_TIMEOUT_SECONDS = 3600;
+const EVERYONE_DELETE_HOURS = 1;
 
 const MESSAGES_RU = {
   dmVipActiveForever: '✅ VIP активирован — {tariff} ⭐',
@@ -103,6 +107,24 @@ const MESSAGES_RU = {
   giveVipAlreadyHas: 'ℹ️ У пользователя уже есть эта VIP-роль.',
   giveVipFailed: '❌ Не удалось выдать роль. Проверьте права и позицию роли бота.',
   giveVipDone: '✅ Роль выдана. VIP будет активирован автоматически.',
+  profileNoLink: '❗ SteamID64 не привязан. Используйте /steamid.',
+  profileInactive: '❌ VIP не активен.',
+  profileActiveUntil: '✅ Активен до <t:{expiresAt}:F>.',
+  profileActiveForever: '✅ Активен навсегда.',
+  profileTitle: '👤 Профиль игрока',
+  profileFieldSteam: 'SteamID64',
+  profileFieldVip: 'VIP статус',
+  profileFieldTariff: 'Тариф',
+  profileFieldHistory: 'История активаций',
+  profileHistoryLine: '{tariff} - <t:{issuedAt}:d>',
+  profileHistoryEmpty: 'Нет данных.',
+  serverinfoTitle: '📊 Информация о серверах',
+  serverinfoFieldVip: 'VIP игроков',
+  serverinfoFieldLinks: 'Привязок',
+  serverinfoFieldExpiring: 'Истекают за 24ч',
+  serverinfoFieldServers: 'Серверы',
+  everyoneTimeout:
+    '🔇 Вы получили тайм-аут на 1 час за использование @everyone без прав.',
 };
 
 const MESSAGES_EN = {
@@ -159,6 +181,24 @@ const MESSAGES_EN = {
   giveVipAlreadyHas: 'ℹ️ The user already has this VIP role.',
   giveVipFailed: '❌ Failed to assign role. Check permissions and role position.',
   giveVipDone: '✅ Role assigned. VIP will be activated automatically.',
+  profileNoLink: '❗ SteamID64 not linked. Use /steamid.',
+  profileInactive: '❌ VIP is not active.',
+  profileActiveUntil: '✅ Active until <t:{expiresAt}:F>.',
+  profileActiveForever: '✅ Active forever.',
+  profileTitle: '👤 Player profile',
+  profileFieldSteam: 'SteamID64',
+  profileFieldVip: 'VIP status',
+  profileFieldTariff: 'Tariff',
+  profileFieldHistory: 'Activation history',
+  profileHistoryLine: '{tariff} - <t:{issuedAt}:d>',
+  profileHistoryEmpty: 'No data.',
+  serverinfoTitle: '📊 Server information',
+  serverinfoFieldVip: 'VIP players',
+  serverinfoFieldLinks: 'Linked accounts',
+  serverinfoFieldExpiring: 'Expiring in 24h',
+  serverinfoFieldServers: 'Servers',
+  everyoneTimeout:
+    '🔇 You have been timed out for 1 hour for using @everyone without permission.',
 };
 
 const TARIFF_LABELS_RU = {
@@ -184,12 +224,15 @@ const AUDIT_LABELS_RU = {
   link_remove: 'Привязка удалена',
   newera_add: 'NewEra выдан',
   newera_remove: 'NewEra снят',
+  media_add: 'Media выдан',
+  media_remove: 'Media снят',
   api_givevip: 'API: выдача VIP',
   api_removevip: 'API: снятие VIP',
   api_setvip: 'API: установка срока VIP',
   command_givevip: 'Команда: выдача VIP',
   command_removevip: 'Команда: снятие VIP',
   command_setvip: 'Команда: установка срока VIP',
+  everyone_timeout: 'Анти-@everyone: тайм-аут',
 };
 
 const AUDIT_LABELS_EN = {
@@ -201,12 +244,15 @@ const AUDIT_LABELS_EN = {
   link_remove: 'Link removed',
   newera_add: 'NewEra granted',
   newera_remove: 'NewEra removed',
+  media_add: 'Media granted',
+  media_remove: 'Media removed',
   api_givevip: 'API: give VIP',
   api_removevip: 'API: remove VIP',
   api_setvip: 'API: set VIP expiration',
   command_givevip: 'Command: give VIP',
   command_removevip: 'Command: remove VIP',
   command_setvip: 'Command: set VIP expiration',
+  everyone_timeout: 'Anti-@everyone: timeout',
 };
 
 const AUDIT_FIELDS_RU = {
@@ -370,6 +416,17 @@ const GIVEVIP_COMMAND = new SlashCommandBuilder()
     return option;
   });
 
+const PROFILE_COMMAND = new SlashCommandBuilder()
+  .setName('profile')
+  .setDescription('View your VIP profile')
+  .setDMPermission(false);
+
+const SERVERINFO_COMMAND = new SlashCommandBuilder()
+  .setName('serverinfo')
+  .setDescription('Show server VIP statistics')
+  .setDMPermission(false)
+  .setDefaultMemberPermissions(PermissionFlagsBits.Administrator);
+
 const config = loadConfig();
 const DEFAULT_LANGUAGE = normalizeLanguage(config.language, 'ru');
 const LEADERBOARD_CONFIG = normalizeLeaderboardConfig(config.leaderboard);
@@ -395,12 +452,15 @@ const AUDIT_ACTIONS = new Set([
   'link_remove',
   'newera_add',
   'newera_remove',
+  'media_add',
+  'media_remove',
   'api_givevip',
   'api_removevip',
   'api_setvip',
   'command_givevip',
   'command_removevip',
   'command_setvip',
+  'everyone_timeout',
 ]);
 
 logStartupInfo(config, servers, primaryServer);
@@ -409,17 +469,17 @@ let db = null;
 let opQueue = Promise.resolve();
 let primaryGuild = null;
 let auditChannel = null;
-let leaderboardGenerator = null;
+let leaderboardGenerators = new Map();
 const invalidLinks = new Set();
 const roleChangeSkips = new Set();
 
-const clientIntents = [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers];
-if (LEADERBOARD_ENABLED) {
-  clientIntents.push(GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent);
-}
-
 const client = new Client({
-  intents: clientIntents,
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+  ],
   partials: [Partials.GuildMember, Partials.User],
 });
 
@@ -481,9 +541,13 @@ function logStartupInfo(config, servers, primaryServer) {
       `[startup] api host=${config.api.host} port=${config.api.port} token=${maskSecret(config.api.token)}`
     );
   }
+  if (config.backupChannelId) {
+    console.log(`[startup] backupChannelId=${config.backupChannelId}`);
+  }
   if (LEADERBOARD_ENABLED) {
+    const serverKeys = LEADERBOARD_CONFIG.servers.map((entry) => entry.key).join(',') || '-';
     console.log(
-      `[startup] leaderboard enabled=true command=${LEADERBOARD_CONFIG.command} autoPostChannelId=${LEADERBOARD_CONFIG.autoPostChannelId || '-'}`
+      `[startup] leaderboard enabled=true command=/${LEADERBOARD_CONFIG.commandName} servers=${serverKeys} default=${LEADERBOARD_CONFIG.defaultServerKey || '-'} autoPostChannelId=${LEADERBOARD_CONFIG.autoPostChannelId || '-'} backgroundRefresh=${LEADERBOARD_CONFIG.backgroundRefreshEnabled ? LEADERBOARD_CONFIG.backgroundRefreshIntervalMs : 'off'}`
     );
   }
 }
@@ -507,6 +571,9 @@ function normalizeConfig(raw) {
   if (!config.primaryServer) {
     config.primaryServer = config.servers[0].name || 'server1';
   }
+  config.backupChannelId = config.backupChannelId
+    ? String(config.backupChannelId).trim()
+    : '';
   const api = config.api && typeof config.api === 'object' ? { ...config.api } : {};
   api.enabled = Boolean(api.enabled);
   api.host = api.host || '0.0.0.0';
@@ -531,17 +598,137 @@ function normalizeConfig(raw) {
   return config;
 }
 
+function normalizeSlashCommandName(value, fallback) {
+  const base = String(value || fallback || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^\/+/, '')
+    .replace(/[^a-z0-9_-]/g, '')
+    .slice(0, 32);
+  if (!base) {
+    return fallback;
+  }
+  return base;
+}
+
+function normalizeLeaderboardServerKey(value, fallback) {
+  const base = String(value || fallback || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9_-]/g, '')
+    .slice(0, 32);
+  if (!base) {
+    return fallback || '';
+  }
+  return base;
+}
+
+function normalizeLeaderboardServerEntry(rawEntry, source, index) {
+  const entry = rawEntry && typeof rawEntry === 'object' ? rawEntry : {};
+  const defaultKey = `s${index + 1}`;
+  const key = normalizeLeaderboardServerKey(
+    entry.key || entry.name || entry.cfCloudServerId || defaultKey,
+    defaultKey
+  );
+  const cfCloudServerId = String(entry.cfCloudServerId || '').trim();
+  if (!cfCloudServerId) {
+    return null;
+  }
+
+  const fallbackStatistic = entry.cfCloudStatistic || source.cfCloudStatistic || 'kills';
+  return {
+    key,
+    name: String(entry.name || key).trim() || key,
+    cfCloudApiKey: String(entry.cfCloudApiKey ?? source.cfCloudApiKey ?? '').trim(),
+    cfCloudApplicationId: String(entry.cfCloudApplicationId ?? source.cfCloudApplicationId ?? '').trim(),
+    cfCloudApplicationSecret: String(
+      entry.cfCloudApplicationSecret ?? source.cfCloudApplicationSecret ?? ''
+    ).trim(),
+    cfCloudEnterpriseToken: String(
+      entry.cfCloudEnterpriseToken ?? source.cfCloudEnterpriseToken ?? ''
+    ).trim(),
+    cfCloudStatistic: String(fallbackStatistic || 'kills').trim() || 'kills',
+    cfCloudServerId,
+    cfCloudApiUrl: String(entry.cfCloudApiUrl || source.cfCloudApiUrl || 'https://data.cftools.cloud').trim(),
+    topCount: Math.max(1, Math.min(50, Number(entry.topCount ?? source.topCount) || 10)),
+    updateIntervalMs: Math.max(
+      60000,
+      Number(entry.updateIntervalMs ?? source.updateIntervalMs) || 300000
+    ),
+  };
+}
+
+function buildLeaderboardServerList(source) {
+  const list = [];
+  const seenKeys = new Set();
+  const pushEntry = (rawEntry, index) => {
+    const normalized = normalizeLeaderboardServerEntry(rawEntry, source, index);
+    if (!normalized) {
+      return;
+    }
+
+    let key = normalized.key;
+    if (seenKeys.has(key)) {
+      let suffix = 2;
+      while (seenKeys.has(`${key}-${suffix}`)) {
+        suffix += 1;
+      }
+      key = `${key}-${suffix}`;
+    }
+    normalized.key = key;
+    seenKeys.add(key);
+    list.push(normalized);
+  };
+
+  if (Array.isArray(source.servers) && source.servers.length > 0) {
+    source.servers.forEach((entry, index) => pushEntry(entry, index));
+  } else {
+    pushEntry(
+      {
+        key: source.defaultServer || 'main',
+        name: source.serverName || source.defaultServer || 'Main',
+        cfCloudServerId: source.cfCloudServerId,
+      },
+      0
+    );
+  }
+
+  return list;
+}
+
 function normalizeLeaderboardConfig(raw) {
   const source = raw && typeof raw === 'object' ? raw : {};
+  const serverEntries = buildLeaderboardServerList(source);
+  const defaultServerKeyCandidate = normalizeLeaderboardServerKey(
+    source.defaultServer,
+    serverEntries[0]?.key || ''
+  );
+  const defaultServerKey = serverEntries.some((entry) => entry.key === defaultServerKeyCandidate)
+    ? defaultServerKeyCandidate
+    : serverEntries[0]?.key || '';
+
   return {
     enabled: Boolean(source.enabled),
-    command: String(source.command || '!top').trim(),
-    updateCommand: String(source.updateCommand || '!update-top').trim(),
+    commandName: normalizeSlashCommandName(source.command, 'top'),
+    updateCommandName: normalizeSlashCommandName(source.updateCommand, 'updatetop'),
+    requireAdminForTop: source.requireAdminForTop !== false,
+    defaultServerKey,
+    servers: serverEntries,
     autoPostChannelId: source.autoPostChannelId ? String(source.autoPostChannelId).trim() : '',
     autoPostIntervalMs: Math.max(60000, Number(source.autoPostIntervalMs) || 3600000),
+    backgroundRefreshEnabled: source.backgroundRefreshEnabled !== false,
+    backgroundRefreshIntervalMs: Math.max(
+      60000,
+      Number(source.backgroundRefreshIntervalMs) || 24 * 60 * 60 * 1000
+    ),
     cfCloudApiKey: source.cfCloudApiKey || '',
+    cfCloudApplicationId: source.cfCloudApplicationId || '',
+    cfCloudApplicationSecret: source.cfCloudApplicationSecret || '',
+    cfCloudEnterpriseToken: source.cfCloudEnterpriseToken || '',
+    cfCloudStatistic: source.cfCloudStatistic || 'kills',
     cfCloudServerId: source.cfCloudServerId || '',
-    cfCloudApiUrl: source.cfCloudApiUrl || 'https://api.cftools.cloud',
+    cfCloudApiUrl: source.cfCloudApiUrl || 'https://data.cftools.cloud',
     topCount: Math.max(1, Math.min(50, Number(source.topCount) || 10)),
     updateIntervalMs: Math.max(60000, Number(source.updateIntervalMs) || 300000),
     logoPath: source.logoPath || './assets/logo.png',
@@ -721,12 +908,15 @@ function getAuditColor(action) {
     case 'role_add':
     case 'command_givevip':
     case 'command_setvip':
+    case 'media_add':
       return 0x2ecc71;
     case 'expire_warn':
       return 0xf1c40f;
     case 'manual_remove':
     case 'expire_remove':
     case 'command_removevip':
+    case 'media_remove':
+    case 'everyone_timeout':
       return 0xe74c3c;
     case 'link_set':
     case 'link_remove':
@@ -926,12 +1116,23 @@ function normalizeSettingsDb(data) {
   } else {
     normalized.whiteList.newera = [...new Set(normalized.whiteList.newera.map(String))];
   }
+  if (!Array.isArray(normalized.whiteList.media)) {
+    normalized.whiteList.media = [];
+  } else {
+    normalized.whiteList.media = [...new Set(normalized.whiteList.media.map(String))];
+  }
   if (Array.isArray(normalized.newera) && normalized.newera.length > 0) {
     normalized.whiteList.newera = [
       ...new Set([...normalized.whiteList.newera, ...normalized.newera.map(String)]),
     ];
   }
+  if (Array.isArray(normalized.media) && normalized.media.length > 0) {
+    normalized.whiteList.media = [
+      ...new Set([...normalized.whiteList.media, ...normalized.media.map(String)]),
+    ];
+  }
   delete normalized.newera;
+  delete normalized.media;
   return normalized;
 }
 
@@ -957,7 +1158,7 @@ function createBaseSettingsDb() {
     Enable: 1,
     ChatCommand: '!loadout',
     PresetSlots: 10,
-    whiteList: { vip: [], newera: [] },
+    whiteList: { vip: [], newera: [], media: [] },
   };
 }
 
@@ -977,6 +1178,7 @@ function extractSettingsPayload(data) {
   delete settings.vipTimed;
   delete settings.history;
   delete settings.newera;
+  delete settings.media;
   return normalizeSettingsDb(settings);
 }
 
@@ -1275,6 +1477,9 @@ async function syncWhitelistToServers() {
   const newera = Array.isArray(db.whiteList?.newera)
     ? [...new Set(db.whiteList.newera.map(String))]
     : [];
+  const media = Array.isArray(db.whiteList?.media)
+    ? [...new Set(db.whiteList.media.map(String))]
+    : [];
   for (const server of servers) {
     if (server === primaryServer) {
       continue;
@@ -1284,6 +1489,7 @@ async function syncWhitelistToServers() {
       const settingsPayload = extractSettingsPayload(serverDb);
       settingsPayload.whiteList.vip = [...whitelist];
       settingsPayload.whiteList.newera = [...newera];
+      settingsPayload.whiteList.media = [...media];
       await enqueueServerSave(server, settingsPayload);
     } catch (err) {
       console.error(`Failed to sync whitelist to ${server.name}:`, err);
@@ -1922,7 +2128,7 @@ function removeVip(steam64) {
 function ensureNewera(steam64) {
   const key = String(steam64);
   if (!db.whiteList || typeof db.whiteList !== 'object') {
-    db.whiteList = { vip: [] };
+    db.whiteList = { vip: [], newera: [], media: [] };
   }
   if (!Array.isArray(db.whiteList.newera)) {
     db.whiteList.newera = [];
@@ -1935,7 +2141,7 @@ function ensureNewera(steam64) {
 function removeNewera(steam64) {
   const key = String(steam64);
   if (!db.whiteList || typeof db.whiteList !== 'object') {
-    db.whiteList = { vip: [] };
+    db.whiteList = { vip: [], newera: [], media: [] };
     return;
   }
   if (!Array.isArray(db.whiteList.newera)) {
@@ -1943,6 +2149,32 @@ function removeNewera(steam64) {
     return;
   }
   db.whiteList.newera = db.whiteList.newera.filter((entry) => entry !== key);
+}
+
+function ensureMedia(steam64) {
+  const key = String(steam64);
+  if (!db.whiteList || typeof db.whiteList !== 'object') {
+    db.whiteList = { vip: [], newera: [], media: [] };
+  }
+  if (!Array.isArray(db.whiteList.media)) {
+    db.whiteList.media = [];
+  }
+  if (!db.whiteList.media.includes(key)) {
+    db.whiteList.media.push(key);
+  }
+}
+
+function removeMedia(steam64) {
+  const key = String(steam64);
+  if (!db.whiteList || typeof db.whiteList !== 'object') {
+    db.whiteList = { vip: [], newera: [], media: [] };
+    return;
+  }
+  if (!Array.isArray(db.whiteList.media)) {
+    db.whiteList.media = [];
+    return;
+  }
+  db.whiteList.media = db.whiteList.media.filter((entry) => entry !== key);
 }
 
 function findDiscordIdBySteam(steam64) {
@@ -2231,6 +2463,82 @@ async function handleNeweraRoleRemoved(member) {
   });
 }
 
+async function handleMediaRoleAdded(member) {
+  const discordId = member.id;
+  const language = resolveUserLanguage(discordId, member.guild?.preferredLocale);
+  const steam64 = getLinkedSteamId(discordId);
+  if (!steam64) {
+    await logAction('media_missing_link', {
+      discordId,
+      steam64: null,
+      roleName: MEDIA_ROLE_NAME,
+      expiresAt: null,
+      note: 'role_add_no_link',
+    });
+    await sendDm(member, { embeds: [buildMissingLinkEmbed(MEDIA_ROLE_NAME, language)] });
+    return;
+  }
+
+  const steamKey = String(steam64);
+  ensureMedia(steamKey);
+
+  addHistory('media_add', {
+    discordId,
+    steam64: steamKey,
+    roleName: MEDIA_ROLE_NAME,
+    expiresAt: 0,
+    note: 'auto',
+  });
+
+  await persistAndSync();
+
+  await sendDm(member, { embeds: [buildRoleActivatedEmbed(MEDIA_ROLE_NAME, language)] });
+
+  await logAction('media_add', {
+    discordId,
+    steam64: steamKey,
+    roleName: MEDIA_ROLE_NAME,
+    expiresAt: 0,
+    note: 'auto',
+  });
+}
+
+async function handleMediaRoleRemoved(member) {
+  const discordId = member.id;
+  const steam64 = getLinkedSteamId(discordId);
+  if (!steam64) {
+    await logAction('media_missing_link', {
+      discordId,
+      steam64: null,
+      roleName: MEDIA_ROLE_NAME,
+      expiresAt: null,
+      note: 'role_remove_no_link',
+    });
+    return;
+  }
+
+  const steamKey = String(steam64);
+  removeMedia(steamKey);
+
+  addHistory('media_remove', {
+    discordId,
+    steam64: steamKey,
+    roleName: MEDIA_ROLE_NAME,
+    expiresAt: 0,
+    note: 'manual',
+  });
+
+  await persistAndSync();
+
+  await logAction('media_remove', {
+    discordId,
+    steam64: steamKey,
+    roleName: MEDIA_ROLE_NAME,
+    expiresAt: 0,
+    note: 'manual',
+  });
+}
+
 async function removeDiscordVipRoles(discordId, note) {
   if (!primaryGuild) {
     return;
@@ -2378,16 +2686,325 @@ async function runExpirationCheck() {
   }
 }
 
-function hasAdminPermissionForMessage(message) {
-  return Boolean(message?.member?.permissions?.has(PermissionFlagsBits.Administrator));
+async function handleProfileCommand(interaction, interactionLanguage) {
+  const messages = getMessagesForLanguage(interactionLanguage);
+  const discordId = interaction.user.id;
+  const steam64 = getLinkedSteamId(discordId);
+  if (!steam64) {
+    await interaction.reply({
+      content: messages.profileNoLink,
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const steamKey = String(steam64);
+  const timed = db.vipTimed[steamKey];
+  const isActive = db.whiteList.vip.includes(steamKey);
+  let vipStatus = messages.profileInactive;
+  let tariff = '-';
+
+  if (isActive) {
+    if (timed && Number(timed.expiresAt) > 0) {
+      vipStatus = formatMessage(messages.profileActiveUntil, {
+        expiresAt: Number(timed.expiresAt),
+      });
+      tariff = formatTariffDisplay(timed.roleName || 'VIP', interactionLanguage);
+    } else {
+      vipStatus = messages.profileActiveForever;
+      tariff = formatTariffDisplay(timed?.roleName || 'VIP', interactionLanguage);
+    }
+  }
+
+  const relevantActions = new Set([
+    'role_add',
+    'api_givevip',
+    'command_givevip',
+    'api_setvip',
+    'command_setvip',
+    'manual_set',
+  ]);
+  const userHistory = Array.isArray(db.history)
+    ? db.history
+        .filter((entry) => entry.discordId === discordId && relevantActions.has(entry.action))
+        .slice(-5)
+        .reverse()
+    : [];
+  const historyLines =
+    userHistory.length > 0
+      ? userHistory
+          .map((entry) =>
+            formatMessage(messages.profileHistoryLine, {
+              tariff: formatTariffDisplay(entry.roleName || 'VIP', interactionLanguage),
+              issuedAt: Number(entry.ts) || unixNow(),
+            })
+          )
+          .join('\n')
+      : messages.profileHistoryEmpty;
+
+  const embed = new EmbedBuilder()
+    .setTitle(messages.profileTitle)
+    .setColor(0xffffff)
+    .addFields(
+      { name: messages.profileFieldSteam, value: steamKey, inline: false },
+      { name: messages.profileFieldVip, value: vipStatus, inline: true },
+      { name: messages.profileFieldTariff, value: tariff, inline: true },
+      { name: messages.profileFieldHistory, value: historyLines, inline: false }
+    )
+    .setTimestamp();
+
+  await interaction.reply({
+    embeds: [embed],
+    ephemeral: true,
+  });
+}
+
+async function handleServerInfoCommand(interaction, interactionLanguage) {
+  const messages = getMessagesForLanguage(interactionLanguage);
+  const now = unixNow();
+  const total = new Set(db.whiteList.vip.map(String)).size;
+  const links = Object.keys(db.links).length;
+  const timedEntries = Object.entries(db.vipTimed).filter(
+    ([steam64, record]) =>
+      db.whiteList.vip.includes(String(steam64)) && Number(record.expiresAt) > 0
+  );
+  const expiring24h = timedEntries.filter(([, record]) => {
+    const expiresAt = Number(record.expiresAt) || 0;
+    return expiresAt > now && expiresAt - now <= 86400;
+  }).length;
+  const serverLines =
+    servers
+      .map((server) => `- **${server.name}** (\`${server.type}\`)`)
+      .join('\n') || '-';
+
+  const embed = new EmbedBuilder()
+    .setTitle(messages.serverinfoTitle)
+    .setColor(0x5865f2)
+    .addFields(
+      { name: messages.serverinfoFieldVip, value: String(total), inline: true },
+      { name: messages.serverinfoFieldLinks, value: String(links), inline: true },
+      { name: messages.serverinfoFieldExpiring, value: String(expiring24h), inline: true },
+      { name: messages.serverinfoFieldServers, value: serverLines, inline: false }
+    )
+    .setTimestamp();
+
+  await interaction.reply({
+    embeds: [embed],
+    ephemeral: true,
+  });
+}
+
+async function sendDailyBackup() {
+  const channelId = String(config.backupChannelId || '').trim();
+  if (!channelId || !client.isReady() || !db) {
+    return;
+  }
+
+  try {
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+    if (!channel || !channel.isTextBased()) {
+      return;
+    }
+
+    const metaPayload = extractMetaPayload(db);
+    const attachment = new AttachmentBuilder(Buffer.from(JSON.stringify(metaPayload, null, 2), 'utf8'), {
+      name: `backup-${new Date().toISOString().slice(0, 10)}.json`,
+    });
+
+    await channel.send({
+      content: `Ежедневный бэкап базы данных - <t:${unixNow()}:F>`,
+      files: [attachment],
+    });
+  } catch (err) {
+    console.error('[backup] Failed to send backup:', err?.message || err);
+  }
+}
+
+function startDailyBackup() {
+  const channelId = String(config.backupChannelId || '').trim();
+  if (!channelId) {
+    return;
+  }
+
+  const dayMs = 24 * 60 * 60 * 1000;
+  setTimeout(() => {
+    void sendDailyBackup();
+    setInterval(() => {
+      void sendDailyBackup();
+    }, dayMs);
+  }, dayMs);
+  console.log('[backup] Daily backup scheduled.');
+}
+
+async function handleEveryoneProtection(message) {
+  if (!message.inGuild() || !message.content || !message.member || message.author?.bot) {
+    return;
+  }
+  if (!message.mentions.everyone) {
+    return;
+  }
+
+  const member = message.member;
+  if (
+    member.permissions.has(PermissionFlagsBits.Administrator) ||
+    member.permissions.has(PermissionFlagsBits.MentionEveryone)
+  ) {
+    return;
+  }
+
+  const language = resolveUserLanguage(member.id, message.guild?.preferredLocale);
+  const messages = getMessagesForLanguage(language);
+  let deletedCount = 0;
+
+  try {
+    await message.delete().catch(() => {});
+    await member.timeout(EVERYONE_TIMEOUT_SECONDS * 1000, '@everyone spam');
+
+    const cutoff = Date.now() - EVERYONE_DELETE_HOURS * 3600 * 1000;
+    const fetched = await message.channel.messages.fetch({ limit: 100 }).catch(() => null);
+    if (fetched) {
+      const ownMessages = fetched.filter(
+        (entry) => entry.author?.id === member.id && entry.createdTimestamp >= cutoff
+      );
+      if (ownMessages.size > 0) {
+        deletedCount = ownMessages.size;
+        await message.channel.bulkDelete(ownMessages, true).catch(() => {});
+      }
+    }
+
+    await sendDmToUserId(member.id, {
+      content: messages.everyoneTimeout,
+    }).catch(() => {});
+
+    await logAction('everyone_timeout', {
+      serverName: primaryServer.name,
+      discordId: member.id,
+      steam64: getLinkedSteamId(member.id),
+      roleName: null,
+      expiresAt: null,
+      note: `deleted=${deletedCount}`,
+    });
+  } catch (err) {
+    console.error('[everyone-protection] Failed:', err?.message || err);
+  }
+}
+
+async function assignMemberRole(member) {
+  if (!member || !primaryGuild) {
+    return;
+  }
+  try {
+    const candidateNames = new Set(
+      MEMBER_ROLE_NAMES.map((name) => String(name || '').trim().toLowerCase()).filter(Boolean)
+    );
+    const role = primaryGuild.roles.cache.find(
+      (entry) => candidateNames.has(String(entry.name || '').trim().toLowerCase())
+    );
+    if (!role || member.roles.cache.has(role.id)) {
+      return;
+    }
+    await member.roles.add(role, 'SteamID linked');
+  } catch (err) {
+    console.error('[member-role] Failed to assign:', err?.message || err);
+  }
+}
+
+async function handleMemberLeave(member) {
+  if (!db) {
+    return;
+  }
+
+  const discordId = member.id;
+  const steam64 = getLinkedSteamId(discordId);
+  if (!steam64) {
+    return;
+  }
+  const steamKey = String(steam64);
+  const hadVip = db.whiteList.vip.includes(steamKey);
+  const hadMedia = Array.isArray(db.whiteList?.media) && db.whiteList.media.includes(steamKey);
+  if (!hadVip && !hadMedia) {
+    return;
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  let wasKicked = false;
+  try {
+    if (
+      member.guild.members.me &&
+      member.guild.members.me.permissions.has(PermissionFlagsBits.ViewAuditLog)
+    ) {
+      const auditLogs = await member.guild.fetchAuditLogs({ type: 20, limit: 5 });
+      const kickEntry = auditLogs.entries.find(
+        (entry) =>
+          entry.target &&
+          entry.target.id === discordId &&
+          Date.now() - entry.createdTimestamp < 5000
+      );
+      if (kickEntry) {
+        wasKicked = true;
+      }
+    }
+  } catch (err) {
+    // Ignore audit fetch failures and continue as voluntary leave.
+  }
+
+  if (wasKicked) {
+    return;
+  }
+
+  if (hadVip) {
+    removeVip(steamKey);
+    delete db.vipTimed[steamKey];
+    addHistory('expire_remove', {
+      discordId,
+      steam64: steamKey,
+      roleName: null,
+      expiresAt: null,
+      note: 'member_left',
+    });
+  }
+
+  if (hadMedia) {
+    removeMedia(steamKey);
+    addHistory('media_remove', {
+      discordId,
+      steam64: steamKey,
+      roleName: MEDIA_ROLE_NAME,
+      expiresAt: 0,
+      note: 'member_left',
+    });
+  }
+
+  await persistAndSync();
+
+  if (hadVip) {
+    await logAction('expire_remove', {
+      serverName: primaryServer.name,
+      discordId,
+      steam64: steamKey,
+      roleName: null,
+      expiresAt: 0,
+      note: 'member_left_discord',
+    });
+  }
+  if (hadMedia) {
+    await logAction('media_remove', {
+      serverName: primaryServer.name,
+      discordId,
+      steam64: steamKey,
+      roleName: MEDIA_ROLE_NAME,
+      expiresAt: 0,
+      note: 'member_left_discord',
+    });
+  }
 }
 
 async function initializeLeaderboardModule() {
   if (!LEADERBOARD_ENABLED) {
     return;
   }
-  if (!LEADERBOARD_CONFIG.cfCloudApiKey || !LEADERBOARD_CONFIG.cfCloudServerId) {
-    console.warn('[leaderboard] Missing cfCloudApiKey or cfCloudServerId. Module disabled.');
+  if (!LEADERBOARD_CONFIG.servers.length) {
+    console.warn('[leaderboard] Missing leaderboard.servers configuration. Module disabled.');
     return;
   }
 
@@ -2396,7 +3013,7 @@ async function initializeLeaderboardModule() {
     LeaderboardGenerator = require('./leaderboard/leaderboard-generator');
   } catch (err) {
     console.warn('[leaderboard] Failed to load module:', err?.message || err);
-    console.warn('[leaderboard] Install missing deps (example: npm i canvas) and restart.');
+    console.warn('[leaderboard] Install missing deps and restart.');
     return;
   }
 
@@ -2408,106 +3025,270 @@ async function initializeLeaderboardModule() {
     return;
   }
 
-  leaderboardGenerator = new LeaderboardGenerator({
-    cfCloudApiKey: LEADERBOARD_CONFIG.cfCloudApiKey,
-    cfCloudServerId: LEADERBOARD_CONFIG.cfCloudServerId,
-    cfCloudApiUrl: LEADERBOARD_CONFIG.cfCloudApiUrl,
-    logoPath: LEADERBOARD_CONFIG.logoPath,
-    backgroundPath: LEADERBOARD_CONFIG.backgroundPath,
-    fontPath: LEADERBOARD_CONFIG.fontPath,
-    topCount: LEADERBOARD_CONFIG.topCount,
-    updateInterval: LEADERBOARD_CONFIG.updateIntervalMs,
-  });
+  leaderboardGenerators = new Map();
+  for (const serverEntry of LEADERBOARD_CONFIG.servers) {
+    const hasLegacyApiKey = Boolean(serverEntry.cfCloudApiKey);
+    const hasAppCredentials = Boolean(
+      serverEntry.cfCloudApplicationId && serverEntry.cfCloudApplicationSecret
+    );
+    if (!hasLegacyApiKey && !hasAppCredentials) {
+      console.warn(
+        `[leaderboard] server=${serverEntry.key} missing credentials (cfCloudApiKey or cfCloudApplicationId+cfCloudApplicationSecret). Skipped.`
+      );
+      continue;
+    }
 
-  if (typeof leaderboardGenerator.registerCustomFont === 'function') {
-    leaderboardGenerator.registerCustomFont();
+    if (serverEntry.cfCloudEnterpriseToken && !hasAppCredentials) {
+      console.warn(
+        `[leaderboard] server=${serverEntry.key} cfCloudEnterpriseToken requires cfCloudApplicationId+cfCloudApplicationSecret. Token ignored.`
+      );
+    }
+
+    if (hasAppCredentials) {
+      console.log(
+        `[leaderboard] server=${serverEntry.key} auth mode=sdk${serverEntry.cfCloudEnterpriseToken ? '+enterprise' : ''}`
+      );
+    } else if (hasLegacyApiKey) {
+      console.log(`[leaderboard] server=${serverEntry.key} auth mode=legacy bearer token`);
+    }
+
+    if (hasLegacyApiKey && !hasAppCredentials && serverEntry.cfCloudApiKey.startsWith('e--')) {
+      console.warn(
+        `[leaderboard] server=${serverEntry.key} cfCloudApiKey looks like enterprise token. Prefer cfCloudApplicationId + cfCloudApplicationSecret.`
+      );
+    }
+
+    const generator = new LeaderboardGenerator({
+      cfCloudApiKey: serverEntry.cfCloudApiKey,
+      cfCloudApplicationId: serverEntry.cfCloudApplicationId,
+      cfCloudApplicationSecret: serverEntry.cfCloudApplicationSecret,
+      cfCloudEnterpriseToken: serverEntry.cfCloudEnterpriseToken,
+      cfCloudStatistic: serverEntry.cfCloudStatistic,
+      cfCloudServerId: serverEntry.cfCloudServerId,
+      cfCloudApiUrl: serverEntry.cfCloudApiUrl,
+      logoPath: LEADERBOARD_CONFIG.logoPath,
+      backgroundPath: LEADERBOARD_CONFIG.backgroundPath,
+      fontPath: LEADERBOARD_CONFIG.fontPath,
+      topCount: serverEntry.topCount,
+      updateInterval: serverEntry.updateIntervalMs,
+    });
+
+    if (typeof generator.registerCustomFont === 'function') {
+      generator.registerCustomFont();
+    }
+
+    leaderboardGenerators.set(serverEntry.key, {
+      key: serverEntry.key,
+      name: serverEntry.name,
+      generator,
+    });
+  }
+
+  if (!leaderboardGenerators.size) {
+    console.warn('[leaderboard] No valid server configuration found. Module disabled.');
+    return;
+  }
+
+  if (LEADERBOARD_CONFIG.backgroundRefreshEnabled) {
+    const refreshInterval = LEADERBOARD_CONFIG.backgroundRefreshIntervalMs;
+    for (const context of leaderboardGenerators.values()) {
+      const refresh = async () => {
+        try {
+          await context.generator.updateLeaderboard(true);
+        } catch (err) {
+          console.warn(
+            `[leaderboard] background refresh failed for server=${context.key}:`,
+            err?.message || err
+          );
+        }
+      };
+      setInterval(() => {
+        void refresh();
+      }, refreshInterval);
+    }
+    console.log(
+      `[leaderboard] Background refresh scheduled every ${refreshInterval} ms for ${leaderboardGenerators.size} server(s).`
+    );
   }
 
   if (LEADERBOARD_CONFIG.autoPostChannelId) {
     const channel = await client.channels.fetch(LEADERBOARD_CONFIG.autoPostChannelId).catch(() => null);
     if (!channel || !channel.isTextBased()) {
       console.warn('[leaderboard] Auto-post channel not found or not text-based.');
-    } else if (typeof leaderboardGenerator.autoPostLeaderboard === 'function') {
-      leaderboardGenerator.autoPostLeaderboard(channel, LEADERBOARD_CONFIG.autoPostIntervalMs);
-      console.log('[leaderboard] Auto-post started.');
+    } else {
+      const fallbackContext = leaderboardGenerators.values().next().value || null;
+      const selectedContext =
+        leaderboardGenerators.get(LEADERBOARD_CONFIG.defaultServerKey) || fallbackContext;
+      if (selectedContext && typeof selectedContext.generator.autoPostLeaderboard === 'function') {
+        selectedContext.generator.autoPostLeaderboard(channel, LEADERBOARD_CONFIG.autoPostIntervalMs, {
+          serverName: selectedContext.name,
+        });
+        console.log(`[leaderboard] Auto-post started for server=${selectedContext.key}.`);
+      }
     }
   }
 }
 
-async function handleLeaderboardMessage(message) {
-  if (!LEADERBOARD_ENABLED || !leaderboardGenerator) {
-    return;
-  }
-  if (!message || !message.content || message.author?.bot || !message.inGuild()) {
-    return;
+function addLeaderboardServerOption(commandBuilder) {
+  if (LEADERBOARD_CONFIG.servers.length <= 1) {
+    return commandBuilder;
   }
 
-  const content = message.content.trim();
-  if (!content) {
-    return;
-  }
-
-  const command = LEADERBOARD_CONFIG.command.toLowerCase();
-  const updateCommand = LEADERBOARD_CONFIG.updateCommand.toLowerCase();
-  const lower = content.toLowerCase();
-
-  if (lower.startsWith(updateCommand)) {
-    if (!hasAdminPermissionForMessage(message)) {
-      await message.reply('No permission.');
-      return;
+  commandBuilder.addStringOption((option) => {
+    option.setName('server').setDescription('Leaderboard server').setRequired(false);
+    if (LEADERBOARD_CONFIG.servers.length <= 25) {
+      for (const entry of LEADERBOARD_CONFIG.servers) {
+        const choiceLabel = `${entry.name} [${entry.key}]`.slice(0, 100);
+        option.addChoices({ name: choiceLabel, value: entry.key.slice(0, 100) });
+      }
     }
-    await message.channel.sendTyping();
-    try {
-      const imageBuffer = await leaderboardGenerator.updateLeaderboard(true);
-      const attachment = new AttachmentBuilder(imageBuffer, { name: 'leaderboard.png' });
-      await message.reply({
-        content: 'Leaderboard refreshed.',
-        files: [attachment],
-      });
-    } catch (err) {
-      console.warn('[leaderboard] update command failed:', err?.message || err);
-      await message.reply('Failed to update leaderboard.');
-    }
-    return;
+    return option;
+  });
+
+  return commandBuilder;
+}
+
+function buildLeaderboardSlashCommands() {
+  if (!LEADERBOARD_ENABLED) {
+    return [];
+  }
+  const commands = [];
+  const topCommand = addLeaderboardServerOption(
+    new SlashCommandBuilder()
+    .setName(LEADERBOARD_CONFIG.commandName)
+    .setDescription('Show leaderboard')
+    .setDMPermission(false)
+  );
+  if (LEADERBOARD_CONFIG.requireAdminForTop) {
+    topCommand.setDefaultMemberPermissions(PermissionFlagsBits.Administrator);
+  }
+  commands.push(topCommand);
+
+  if (LEADERBOARD_CONFIG.updateCommandName !== LEADERBOARD_CONFIG.commandName) {
+    const updateCommand = addLeaderboardServerOption(
+      new SlashCommandBuilder()
+      .setName(LEADERBOARD_CONFIG.updateCommandName)
+      .setDescription('Refresh leaderboard cache')
+      .setDMPermission(false)
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    );
+    commands.push(updateCommand);
+  } else {
+    console.warn('[leaderboard] command and updateCommand are equal, update command skipped.');
   }
 
-  if (!lower.startsWith(command)) {
-    return;
+  return commands;
+}
+
+function resolveLeaderboardServer(rawKey) {
+  if (!LEADERBOARD_CONFIG.servers.length) {
+    return null;
   }
 
-  await message.channel.sendTyping();
+  const fallbackContext =
+    leaderboardGenerators.get(LEADERBOARD_CONFIG.defaultServerKey) ||
+    leaderboardGenerators.values().next().value ||
+    null;
+  if (!rawKey) {
+    return fallbackContext;
+  }
+
+  const normalizedKey = normalizeLeaderboardServerKey(rawKey, '');
+  if (!normalizedKey) {
+    return fallbackContext;
+  }
+
+  return leaderboardGenerators.get(normalizedKey) || null;
+}
+
+async function handleLeaderboardInteraction(interaction) {
+  if (!LEADERBOARD_ENABLED) {
+    return false;
+  }
+  const isTopCommand = interaction.commandName === LEADERBOARD_CONFIG.commandName;
+  const isUpdateCommand = interaction.commandName === LEADERBOARD_CONFIG.updateCommandName;
+  if (!isTopCommand && !isUpdateCommand) {
+    return false;
+  }
+
+  if (!leaderboardGenerators.size) {
+    await interaction.reply({
+      content: 'Leaderboard module is not available.',
+      ephemeral: true,
+    });
+    return true;
+  }
+
+  const needsAdminPermission =
+    isUpdateCommand || (isTopCommand && LEADERBOARD_CONFIG.requireAdminForTop);
+  if (needsAdminPermission && !interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+    await interaction.reply({
+      content: 'No permission.',
+      ephemeral: true,
+    });
+    return true;
+  }
+
+  const requestedServer = interaction.options.getString('server', false);
+  const serverContext = resolveLeaderboardServer(requestedServer);
+  if (!serverContext) {
+    const available = LEADERBOARD_CONFIG.servers.map((entry) => entry.key).join(', ') || '-';
+    await interaction.reply({
+      content: `Unknown server. Available values: ${available}`,
+      ephemeral: true,
+    });
+    return true;
+  }
+
+  await interaction.deferReply();
   try {
-    const imageBuffer = await leaderboardGenerator.updateLeaderboard(false);
-    const attachment = new AttachmentBuilder(imageBuffer, { name: 'leaderboard.png' });
-    await message.reply({
-      content: 'Top players:',
-      files: [attachment],
+    const payload = await serverContext.generator.updateLeaderboard(isUpdateCommand);
+    const embed = serverContext.generator.buildLeaderboardEmbed(payload, {
+      refreshed: isUpdateCommand,
+      serverName: serverContext.name,
+    });
+    await interaction.editReply({
+      embeds: [embed],
     });
   } catch (err) {
-    console.warn('[leaderboard] top command failed:', err?.message || err);
-    await message.reply('Failed to load leaderboard.');
+    console.warn('[leaderboard] interaction failed:', err?.message || err);
+    await interaction.editReply({
+      content: 'Failed to load leaderboard.',
+    });
   }
+  return true;
 }
 
 async function registerCommands() {
   const rest = new REST({ version: '10' }).setToken(config.token);
+  const commandBuilders = [
+    STATUS_COMMAND,
+    STEAMID_COMMAND,
+    LINK_COMMAND,
+    UNLINK_COMMAND,
+    WHOIS_COMMAND,
+    VIPLIST_COMMAND,
+    STATS_COMMAND,
+    SETVIP_COMMAND,
+    REMOVEVIP_COMMAND,
+    GIVEVIP_COMMAND,
+    PROFILE_COMMAND,
+    SERVERINFO_COMMAND,
+  ];
+  for (const command of buildLeaderboardSlashCommands()) {
+    if (commandBuilders.some((entry) => entry.name === command.name)) {
+      console.warn(`[leaderboard] Slash command name conflict: ${command.name}`);
+      continue;
+    }
+    commandBuilders.push(command);
+  }
+
   await rest.put(Routes.applicationGuildCommands(config.clientId, config.guildId), {
-    body: [
-      STATUS_COMMAND.toJSON(),
-      STEAMID_COMMAND.toJSON(),
-      LINK_COMMAND.toJSON(),
-      UNLINK_COMMAND.toJSON(),
-      WHOIS_COMMAND.toJSON(),
-      VIPLIST_COMMAND.toJSON(),
-      STATS_COMMAND.toJSON(),
-      SETVIP_COMMAND.toJSON(),
-      REMOVEVIP_COMMAND.toJSON(),
-      GIVEVIP_COMMAND.toJSON(),
-    ],
+    body: commandBuilders.map((entry) => entry.toJSON()),
   });
 }
 
-client.once('ready', async () => {
+client.once('clientReady', async () => {
   console.log(`Logged in as ${client.user.tag}`);
   try {
     await loadPrimaryDb();
@@ -2533,13 +3314,22 @@ client.once('ready', async () => {
 
   await enqueueOperation(runExpirationCheck);
   setInterval(() => enqueueOperation(runExpirationCheck), CHECK_INTERVAL_MS);
+  startDailyBackup();
 });
 
 client.on('messageCreate', async (message) => {
   try {
-    await handleLeaderboardMessage(message);
+    await handleEveryoneProtection(message);
   } catch (err) {
-    console.warn('[leaderboard] Message handler failed:', err?.message || err);
+    console.error('[everyone-protection] Error:', err?.message || err);
+  }
+});
+
+client.on('guildMemberRemove', async (member) => {
+  try {
+    await handleMemberLeave(member);
+  } catch (err) {
+    console.error('[member-leave] Error:', err?.message || err);
   }
 });
 
@@ -2568,13 +3358,15 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
     enqueueOperation(() => handleVipRoleAdded(newMember, roleName));
   }
 
-  const hadNeweraBefore = oldRoles.has(NEWERA_ROLE_NAME);
-  const hasNeweraAfter = newRoles.has(NEWERA_ROLE_NAME);
-  if (!hadNeweraBefore && hasNeweraAfter) {
-    enqueueOperation(() => handleNeweraRoleAdded(newMember));
+  const oldRolesLower = new Set([...oldRoles].map((roleName) => roleName.toLowerCase()));
+  const newRolesLower = new Set([...newRoles].map((roleName) => roleName.toLowerCase()));
+  const hadMediaBefore = oldRolesLower.has(MEDIA_ROLE_NAME);
+  const hasMediaAfter = newRolesLower.has(MEDIA_ROLE_NAME);
+  if (!hadMediaBefore && hasMediaAfter) {
+    enqueueOperation(() => handleMediaRoleAdded(newMember));
   }
-  if (hadNeweraBefore && !hasNeweraAfter) {
-    enqueueOperation(() => handleNeweraRoleRemoved(newMember));
+  if (hadMediaBefore && !hasMediaAfter) {
+    enqueueOperation(() => handleMediaRoleRemoved(newMember));
   }
 
   const hasVipAfter = [...newRoles].some((roleName) => VIP_ROLE_NAMES.has(roleName));
@@ -2600,6 +3392,41 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
     rememberUserLanguage(interaction.user.id, interactionLanguage);
+
+    if (await handleLeaderboardInteraction(interaction)) {
+      return;
+    }
+
+    if (interaction.commandName === 'profile') {
+      if (!interaction.inGuild()) {
+        await interaction.reply({
+          content: messages.onlyGuild,
+          ephemeral: true,
+        });
+        return;
+      }
+      await handleProfileCommand(interaction, interactionLanguage);
+      return;
+    }
+
+    if (interaction.commandName === 'serverinfo') {
+      if (!interaction.inGuild()) {
+        await interaction.reply({
+          content: messages.onlyGuild,
+          ephemeral: true,
+        });
+        return;
+      }
+      if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+        await interaction.reply({
+          content: messages.noPermWhois,
+          ephemeral: true,
+        });
+        return;
+      }
+      await handleServerInfoCommand(interaction, interactionLanguage);
+      return;
+    }
 
     if (interaction.commandName === 'status') {
       const discordId = interaction.user.id;
@@ -2714,6 +3541,15 @@ client.on('interactionCreate', async (interaction) => {
           content: messages.steamidSaved,
         });
 
+        try {
+          const guildMember = await interaction.guild.members.fetch(discordId).catch(() => null);
+          if (guildMember) {
+            await assignMemberRole(guildMember);
+          }
+        } catch (err) {
+          // Ignore member role assignment errors to not block the command flow.
+        }
+
         await logAction('link_set', {
           serverName: primaryServer.name,
           discordId,
@@ -2776,6 +3612,15 @@ client.on('interactionCreate', async (interaction) => {
         await interaction.editReply({
           content: previous && previous !== input ? messages.linkUpdated : messages.linkSaved,
         });
+
+        try {
+          const guildMember = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
+          if (guildMember) {
+            await assignMemberRole(guildMember);
+          }
+        } catch (err) {
+          // Ignore member role assignment errors to not block the command flow.
+        }
 
         await logAction('link_set', {
           serverName: primaryServer.name,

@@ -14,7 +14,8 @@
     "basic-ftp": "^5.0.5",
     "cftools-sdk": "^3.6.0",
     "discord.js": "^14.16.0",
-    "express": "^4.22.1"
+    "express": "^4.22.1",
+    "node-fetch": "^2.7.0"
   },
   "devDependencies": {
     "pkg": "^5.8.1"
