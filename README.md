@@ -1,130 +1,138 @@
 # SWAGA-Beta
 
-Менеджер VIP для DayZ: Discord-бот + настольный GUI. Бот ведет список VIP, синхронизирует whitelist на серверах (local/FTP), отправляет уведомления и дает API для GUI.
+Discord-бот для DayZ: управление VIP, синхронизация whitelist (local/FTP), API для GUI, публикация дуэлей, лидерборды и аудит.
 
 ## Возможности
-- Привязка Discord и SteamID64 (самостоятельно или администратором).
-- Выдача и снятие VIP, учет сроков (VIP Test / 14 Days / Monthly / VIP навсегда) и роль newera.
-- Автоматическое истечение VIP и предупреждения за N часов до конца срока.
-- Синхронизация whitelist на один или несколько серверов (локально или по FTP).
-- История дуэлей: чтение history.json и публикация событий в Discord (с ссылками на CFTools).
-- Аудит-логи: файл и отдельный канал Discord.
-- API для GUI (список VIP, статистика, логи, выдача/снятие/установка срока).
+
+- Привязка Discord к SteamID64 (`/steamid`, `/link`, `/unlink`).
+- VIP-логика с тарифами, сроками, авто-истечением и уведомлениями в DM.
+- Поддержка ролей `VIP`, `newera`, `media`.
+- Синхронизация whitelist между несколькими серверами (`local` и `ftp`).
+- History feed из `history.json` в Discord-каналы.
+- Лидерборд CF Cloud (`/top`, `/updatetop`, автообновление, автопост).
+- REST API для GUI.
+- Аудит в файл + аудит в Discord-канал.
+- Ежедневный backup мета-данных в Discord-канал.
+- Анти-`@everyone` (тайм-аут + очистка сообщений за час).
 - Локализация RU/EN.
 
 ## Структура репозитория
-- bot/ - Discord-бот и API.
-- gui/ - Electron + React приложение для управления через API.
+
+- `bot/` — бот, API, модули history feed/leaderboard.
+- `gui/` — GUI-клиент (Electron + React).
 
 ## Требования
-- Node.js >= 16.9 (бот)
-- Node.js + npm (GUI/Electron)
+
+- Node.js >= 16.9
+- npm
 
 ## Быстрый старт (бот)
-1) cd bot
-2) npm install
-3) Скопировать config.example.json в config.json
-4) Заполнить конфиг (см. ниже)
-5) npm start
 
-## Быстрый старт (GUI)
-1) cd gui
-2) npm install
-3) В одном терминале: npm run dev:renderer
-4) В другом терминале: npm start
+```bash
+cd bot
+npm install
+copy config.example.json config.json
+# заполнить config.json
+npm start
+```
 
-Сборка portable-версии для Windows:
-- npm run build
+## Основные команды Discord
 
-## Конфигурация (bot/config.json)
-Ниже ключевые поля. Полный шаблон - bot/config.example.json.
+- `/status`
+- `/steamid`
+- `/link`
+- `/unlink`
+- `/whois`
+- `/viplist`
+- `/stats`
+- `/givevip`
+- `/setvip`
+- `/removevip`
+- `/profile`
+- `/serverinfo`
+- `/top` (если включен leaderboard)
+- `/updatetop` (если включен leaderboard)
 
-### Базовые
-- token - токен Discord-бота.
-- clientId - ID приложения Discord.
-- guildId - ID сервера.
-- logPath - путь к файлу логов (например, ./vip.log).
-- checkIntervalSeconds - частота проверки VIP и истечения.
-- notifyBeforeHours - когда предупреждать об окончании (массив часов, например [24, 6, 1]).
-- language - ru или en.
-- auditChannelId - канал для аудит-логов (опционально).
+## REST API (кратко)
 
-### Серверы и whitelist
-- servers - массив серверов. Каждый сервер:
-  - name - имя (используется в логах и истории).
-  - type - local или ftp (если не задано, определяется автоматически).
-  - profilePath - путь к профилю сервера.
-  - whitelistPath - путь к JSON whitelist (поддерживает $profile:).
-  - ftp - параметры FTP (host, port, user, password, secure).
-- primaryServer - имя сервера по умолчанию для логов и команд.
+- `GET /api/health`
+- `GET /api/vip/list`
+- `GET /api/vip/stats`
+- `GET /api/logs`
+- `POST /api/vip/give`
+- `POST /api/vip/remove`
+- `POST /api/vip/set`
 
-### История дуэлей (history feed)
-Раздел history управляет чтением history.json и публикацией событий в Discord.
+Авторизация:
 
-Пример:
-{
-  "history": {
-    "pollMs": 3000,
-    "serverName": "SERVER_NAME",
-    "feeds": [
-      {
-        "name": "S1",
-        "server": "S1",
-        "path": "$profile:history.json",
-        "channelId": "DISCORD_CHANNEL_ID"
-      }
-    ]
-  }
-}
+- `x-api-token: <token>`
+- или `Authorization: Bearer <token>`
 
-Поддерживаются также поля footerText, thumbnailUrl, color, statePath.
+## Ключевые блоки config.json
 
-### API (для GUI)
-- api.enabled - включить API.
-- api.host, api.port - адрес и порт.
-- api.token - токен доступа (обязателен).
-- api.allowedOrigins - CORS (например, http://localhost:5173).
-- api.maxLogLines, api.maxPageSize - лимиты выдачи.
+### База
 
-Авторизация API: заголовок x-api-token: <token> или Authorization: Bearer <token>.
+- `token`, `clientId`, `guildId`
+- `logPath`
+- `checkIntervalSeconds`
+- `notifyBeforeHours`
+- `language`
+- `auditChannelId`
+- `backupChannelId`
 
-## Команды Discord
-Доступно (часть требует прав Manage Roles):
-- /status - статус VIP.
-- /steamid - привязка своего SteamID64.
-- /link, /unlink - админская привязка и отвязка.
-- /whois - показать SteamID64 и VIP статус пользователя.
-- /viplist - список активных VIP.
-- /stats - статистика VIP.
-- /givevip - выдать VIP роль.
-- /setvip - установить срок VIP.
-- /removevip - снять VIP.
+### Серверы
 
-## API (кратко)
-- GET /api/health - статус.
-- GET /api/vip/list - список VIP (пагинация, поиск, сортировка).
-- GET /api/vip/stats - статистика VIP.
-- GET /api/logs - последние строки логов.
-- POST /api/vip/give - выдать VIP.
-- POST /api/vip/remove - снять VIP.
-- POST /api/vip/set - установить срок VIP.
+- `primaryServer`
+- `servers[]`:
+  - `name`
+  - `type`: `local` или `ftp`
+  - `profilePath`
+  - `whitelistPath` (поддерживает `$profile:`)
+  - `ftp.{host,port,user,password,secure}` для FTP
+
+### API
+
+- `api.enabled`
+- `api.host`
+- `api.port`
+- `api.token`
+- `api.allowedOrigins`
+- `api.maxLogLines`
+- `api.maxPageSize`
+
+### History feed
+
+- `history.pollMs`
+- `history.serverName`
+- `history.feeds[]`:
+  - `name`
+  - `server`
+  - `path`
+  - `channelId`
+  - `serverName` (опционально)
+
+### Leaderboard
+
+- `leaderboard.enabled`
+- `leaderboard.command`
+- `leaderboard.updateCommand`
+- `leaderboard.defaultServer`
+- `leaderboard.servers[]` с CF Cloud параметрами
+- `leaderboard.autoPostChannelId`
+- `leaderboard.autoPostIntervalMs`
+- `leaderboard.backgroundRefreshEnabled`
 
 ## Файлы данных
-- bot/config.json - конфиг (секреты, не коммитить).
-- bot/bot-db.json - локальная БД бота (создается автоматически).
-- bot/.history_state*.json - состояние history feed.
-- bot/vip.log - файл логов (по умолчанию).
 
-## Примечания
-- GUI ожидает, что API бота включен и доступен.
-- Для корректной выдачи ролей у бота должны быть права и позиция роли выше VIP-ролей.
+- `bot/config.json` — конфиг (секреты не коммитить).
+- `bot/bot-db.json` — мета-данные бота (links/locales/vipTimed/history).
+- `bot/vip.log` — лог действий.
+- `bot/.history_state*.json` — state history feed.
 
-## Кратко для резюме
-- Разработал Discord-бота для DayZ с управлением VIP и автоматической синхронизацией whitelist.
-- Реализовал учет сроков VIP, уведомления об окончании и автоматическое снятие ролей.
-- Поднял защищенный REST API для GUI (токен, CORS, лимиты) и логирование действий.
-- Добавил историю дуэлей и аудит-логи в Discord.
-- Собрал настольный GUI на Electron + React для администраторов.
+## Сборка .exe
 
-## Стек
-Node.js, discord.js, Express, basic-ftp, Electron, React, Vite.
+```bash
+cd bot
+node node_modules/pkg/lib-es5/bin.js index.js --targets node16-win-x64 --output dist/vip-bot.exe
+```
+
