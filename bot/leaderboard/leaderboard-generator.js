@@ -137,6 +137,8 @@ class LeaderboardGenerator {
     this.updateInterval = Math.max(60000, Number(options.updateInterval) || 300000);
     this.cache = null;
     this.lastUpdate = 0;
+    this.autoPostMessageId = '';
+    this.autoPostInFlight = false;
     this.sdkClient = this.createSdkClient();
 
     if (normalizedApiUrl.wasLegacyHost) {
@@ -289,14 +291,56 @@ class LeaderboardGenerator {
 
     const rawData = await this.fetchLeaderboardData();
     const players = this.parseLeaderboardData(rawData);
+    const generatedAt = Math.floor(Date.now() / 1000);
     const payload = {
-      generatedAtUnix: Math.floor(now / 1000),
+      generatedAtUnix: generatedAt,
       players,
     };
 
     this.cache = payload;
-    this.lastUpdate = now;
+    this.lastUpdate = Date.now();
     return payload;
+  }
+
+  getFooterText(serverName) {
+    const base = '\u041f\u043e\u0441\u043b\u0435\u0434\u043d\u0435\u0435 \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0435';
+    return serverName ? `${base} \u2022 ${serverName}` : base;
+  }
+
+  async findExistingAutoPostMessage(channel, serverName) {
+    if (this.autoPostMessageId) {
+      try {
+        return await channel.messages.fetch(this.autoPostMessageId);
+      } catch (err) {
+        this.autoPostMessageId = '';
+      }
+    }
+
+    const expectedFooterText = this.getFooterText(serverName);
+    const botId = channel.client?.user?.id || null;
+
+    try {
+      const recentMessages = await channel.messages.fetch({ limit: 50 });
+      for (const message of recentMessages.values()) {
+        if (botId && message.author?.id !== botId) {
+          continue;
+        }
+
+        const embed = Array.isArray(message.embeds) ? message.embeds[0] : null;
+        const footerText = String(embed?.footer?.text || '').trim();
+        if (!footerText) {
+          continue;
+        }
+        if (footerText === expectedFooterText) {
+          this.autoPostMessageId = message.id;
+          return message;
+        }
+      }
+    } catch (err) {
+      console.warn('[leaderboard] auto-post lookup failed:', err?.message || err);
+    }
+
+    return null;
   }
 
   buildLeaderboardEmbed(payload, options = {}) {
@@ -328,27 +372,42 @@ class LeaderboardGenerator {
       .setDescription(description)
       .setColor(0xffffff)
       .setFooter({
-        text: serverName
-          ? `\u041f\u043e\u0441\u043b\u0435\u0434\u043d\u0435\u0435 \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0435 \u2022 ${serverName}`
-          : '\u041f\u043e\u0441\u043b\u0435\u0434\u043d\u0435\u0435 \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0435',
+        text: this.getFooterText(serverName),
       })
       .setTimestamp(generatedAt * 1000);
   }
 
   async autoPostLeaderboard(channel, interval = 3600000, options = {}) {
     const post = async () => {
+      if (this.autoPostInFlight) {
+        return;
+      }
+      this.autoPostInFlight = true;
       try {
         const payload = await this.updateLeaderboard(true);
         const embed = this.buildLeaderboardEmbed(payload, {
           refreshed: true,
           serverName: options.serverName,
         });
-        await channel.send({ embeds: [embed] });
+        const existingMessage = await this.findExistingAutoPostMessage(channel, options.serverName);
+        if (existingMessage) {
+          try {
+            await existingMessage.edit({ embeds: [embed] });
+            return;
+          } catch (err) {
+            this.autoPostMessageId = '';
+          }
+        }
+        const sentMessage = await channel.send({ embeds: [embed] });
+        this.autoPostMessageId = sentMessage.id;
       } catch (err) {
         console.warn('[leaderboard] auto-post failed:', err?.message || err);
+      } finally {
+        this.autoPostInFlight = false;
       }
     };
 
+    await post();
     setInterval(() => {
       void post();
     }, Math.max(60000, Number(interval) || 3600000));

@@ -1,61 +1,54 @@
 ﻿{
-    "token": "YOUR_BOT_TOKEN",
-    "clientId": "1458161323237183700",
-    "guildId": "1348440636885438634",
+    "token": "YOUR_DISCORD_BOT_TOKEN",
+    "clientId": "YOUR_DISCORD_APP_CLIENT_ID",
+    "guildId": "YOUR_DISCORD_GUILD_ID",
     "logPath": "./vip.log",
     "checkIntervalSeconds": 900,
     "notifyBeforeHours": [
         24
     ],
     "language": "ru",
-    "auditChannelId": "DISCORD_AUDIT_CHANNEL_ID",
+    "auditChannelId": "YOUR_AUDIT_CHANNEL_ID",
     "backupChannelId": "",
-    "history": {
-        "pollMs": 3000,
-        "feeds": [
-            {
-                "name": "S1",
-                "server": "S1",
-                "path": "$profile:/SWG_MODS/SWG_Duels/history.json",
-                "channelId": "DISCORD_DUELS_CHANNEL_ID_S1",
-                "serverName": "SWAGA DEATHMATCH | 20MM | 50BMG",
-                "historyWindow": 50
-            },
-            {
-                "name": "S2",
-                "server": "S2",
-                "path": "$profile:/SWG_MODS/SWG_Duels/history.json",
-                "channelId": "DISCORD_DUELS_CHANNEL_ID_S2",
-                "serverName": "SWAGA DEATHMATCH | SMGs | .338",
-                "historyWindow": 50
-            }
-        ]
+    "tickets": {
+        "categoryId": "TICKETS_CATEGORY_ID",
+        "archiveCategoryId": "TICKETS_ARCHIVE_CATEGORY_ID",
+        "panelChannelId": "TICKETS_PANEL_CHANNEL_ID",
+        "supportRoleId": "SUPPORT_ROLE_ID"
+    },
+    "stats": {
+        "cfCloudApplicationId": "YOUR_CFCLOUD_APP_ID_OR_EMPTY",
+        "cfCloudApplicationSecret": "YOUR_CFCLOUD_APP_SECRET_OR_EMPTY",
+        "cfCloudServerId": "YOUR_CFCLOUD_SERVER_ID_MAIN",
+        "cfCloudApiUrl": "https://data.cftools.cloud",
+        "backgroundImagePath": "",
+        "titlePrefix": "💩 "
     },
     "leaderboard": {
         "enabled": true,
         "requireAdminForTop": true,
         "command": "/top",
         "updateCommand": "/updatetop",
-        "cfCloudApiKey": "",
-        "cfCloudApplicationId": "",
-        "cfCloudApplicationSecret": "",
-        "cfCloudEnterpriseToken": "",
+        "cfCloudApiKey": "YOUR_CFCLOUD_API_KEY_OR_EMPTY",
+        "cfCloudApplicationId": "YOUR_CFCLOUD_APP_ID_OR_EMPTY",
+        "cfCloudApplicationSecret": "YOUR_CFCLOUD_APP_SECRET_OR_EMPTY",
+        "cfCloudEnterpriseToken": "YOUR_CFCLOUD_ENTERPRISE_TOKEN_OR_EMPTY",
         "cfCloudStatistic": "kills",
         "defaultServer": "s1",
-        "cfCloudServerId": "00ebc10b-efbe-437a-bf0f-7fde12ee53ff",
+        "cfCloudServerId": "YOUR_CFCLOUD_SERVER_ID",
         "cfCloudApiUrl": "https://data.cftools.cloud",
         "topCount": 10,
         "updateIntervalMs": 300000,
         "servers": [
             {
                 "key": "s1",
-                "name": "SWAGA 20MM | 50BMG",
-                "cfCloudServerId": "00ebc10b-efbe-437a-bf0f-7fde12ee53ff"
+                "name": "MAIN",
+                "cfCloudServerId": "YOUR_CFCLOUD_SERVER_ID_MAIN"
             },
             {
                 "key": "s2",
-                "name": "SWAGA SMGs | .338",
-                "cfCloudServerId": "11111111-1111-1111-1111-111111111111"
+                "name": "ARENA",
+                "cfCloudServerId": "YOUR_CFCLOUD_SERVER_ID_ARENA"
             }
         ],
         "backgroundRefreshEnabled": true,
@@ -74,18 +67,18 @@
         "maxLogLines": 500,
         "maxPageSize": 100
     },
-    "primaryServer": "S1",
+    "primaryServer": "MAIN",
     "servers": [
         {
-            "name": "S1",
+            "name": "MAIN",
             "type": "local",
-            "profilePath": "C:/Program Files (x86)/CFTools Software GmbH/Architect/Agent/deployments/swaga20/profiles/",
+            "profilePath": "C:/Path/To/ServerProfile_MAIN/",
             "whitelistPath": "$profile:SWG_MODS/SWG_Loadout/settings.json"
         },
         {
-            "name": "S2",
+            "name": "ARENA",
             "type": "ftp",
-            "profilePath": "DayZ_2602-Profile/",
+            "profilePath": "DayZ_Profile_ARENA/",
             "whitelistPath": "$profile:SWG_MODS/SWG_Loadout/settings.json",
             "ftp": {
                 "host": "FTP_HOST",

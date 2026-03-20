@@ -14,17 +14,24 @@ const { Readable, Writable } = require('stream');
 const ftp = require('basic-ftp');
 const express = require('express');
 const {
+  ActionRowBuilder,
   AttachmentBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ChannelType,
   Client,
   EmbedBuilder,
   GatewayIntentBits,
+  ModalBuilder,
   Partials,
   PermissionFlagsBits,
   REST,
   Routes,
   SlashCommandBuilder,
+  TextInputBuilder,
+  TextInputStyle,
 } = require('discord.js');
-const { startHistoryFeed } = require('./historyFeed');
+const StatsCard = require('./stats-card/stats-card');
 
 function stripBom(value) {
   if (!value) {
@@ -52,16 +59,26 @@ const MEDIA_ROLE_NAME = 'media';
 const MEMBER_ROLE_NAMES = [':white_check_mark:', '✅'];
 const EVERYONE_TIMEOUT_SECONDS = 3600;
 const EVERYONE_DELETE_HOURS = 1;
+const TICKET_IDLE_CLOSE_SECONDS = 300;
+const TICKET_IDLE_CHECK_INTERVAL_MS = 60000;
 
 const MESSAGES_RU = {
-  dmVipActiveForever: '✅ VIP активирован — {tariff} ⭐',
-  dmVipActiveTimed: '✅ VIP активирован — {tariff}\n⏳ Действует до: <t:{expiresAt}:F>',
+  dmVipActiveForever: '👑 **VIP активирован навсегда** — {tariff} ⭐\n\nДобро пожаловать в элиту SWAGA. Тебе доступны эксклюзивные скины, уникальные пушки и приоритетный вход — на обоих серверах.\n\n🎮 Заходи и доминируй.',
+  dmVipActiveTimed: '👑 **VIP активирован** — {tariff}\n⏳ Действует до: <t:{expiresAt}:F>\n\nДобро пожаловать в элиту SWAGA. Тебе доступны эксклюзивные скины, уникальные пушки и приоритетный вход — на обоих серверах.\n\n🎮 Заходи и доминируй.',
   dmRoleActivated: '✅ Роль «{roleName}» активирована.',
   dmMissingLink:
-    '⚠️ Роль «{roleName}» обнаружена, но SteamID64 не указан.\nПривяжите SteamID через /steamid или /link.',
-  dmExpiryWarning: '⏰ VIP скоро истечет — {tariff}\n📅 Окончание: <t:{expiresAt}:F>',
+    '👑 **VIP получен!**\n\nЧтобы активировать привилегии на сервере, привяжи свой Steam аккаунт:\n\n1️⃣ Напиши команду `/steamid` и укажи свой SteamID64\n2️⃣ Или создай тикет и мы поможем\n\n-# Не знаешь свой SteamID64? Найди его на [steamid.io](https://steamid.io)',
+  dmExpiryWarningEarly: '👀 **{tariff} истекает через 3 дня**\n📅 Окончание: <t:{expiresAt}:F>\n\nЕщё есть время продлить спокойно — без спешки:\n💳 **399₽**/14 дней • **799₽**/месяц • **1799₽**/навсегда\n\n👉 **[Продлить VIP](<https://discord.com/channels/1348440636885438634/1350468455157203058>)**',
+  dmExpiryWarning: '⚠️ **{tariff} истекает через 24 часа**\n📅 Окончание: <t:{expiresAt}:F>\n\nТы потеряешь доступ к эксклюзивным скинам, уникальным пушкам и приоритетному входу.\n\n🔥 Продли прямо сейчас:\n💳 **399₽**/14 дней • **799₽**/месяц • **1799₽**/навсегда\n\n👉 **[Продлить VIP](<https://discord.com/channels/1348440636885438634/1350468455157203058>)**',
   dmVipExpired:
-    '❌ **VIP закончился**\n⚠️ Отключены: **VIP привилегии**.\n⏳ Продли в течение **24 часов** и получи скидку:\n💳 399₽/14д • ~~799₽~~ **699₽/мес** • ~~1799₽~~ **1599₽/навсегда**\n✅ Продлить: **[создать тикет](<https://discord.com/channels/1348440636885438634/1350468455157203058>)**',
+    '😔 **VIP закончился** — {tariff}\n\nТвои эксклюзивные скины и пушки недоступны. Другие игроки с VIP выглядят лучше тебя прямо сейчас.\n\n⚡ Продли в течение **24 часов** — получи скидку:\n💳 **399₽**/14 дней • ~~799₽~~ **699₽**/месяц • ~~1799₽~~ **1599₽**/навсегда\n\n👉 **[Вернуть VIP со скидкой](<https://discord.com/channels/1348440636885438634/1350468455157203058>)**',
+  dmVipRemoved: '❌ **VIP снят**\nПричина: {reason}\n\n👉 Если считаешь это ошибкой — **[создай тикет](<https://discord.com/channels/1348440636885438634/1350468455157203058>)**',
+  vipRemoveReasonRoleRemoved: 'VIP-роль снята вручную.',
+  vipRemoveReasonAdmin: 'Снят администратором {admin}.',
+  vipRemoveReasonApi: 'Снят через API.',
+  vipRemoveReasonLeftGuild: 'Вы вышли с Discord-сервера.',
+  vipRemoveReasonStartupCheck:
+    'Аккаунт не найден на сервере при проверке после запуска бота.',
   statusLoading: '⏳ Данные еще загружаются… Попробуйте чуть позже.',
   statusNoLink: '❗ SteamID64 для вашего аккаунта не найден.\nПривяжите SteamID через /steamid или /link.',
   statusInactive: '❌ VIP не активен.',
@@ -128,14 +145,22 @@ const MESSAGES_RU = {
 };
 
 const MESSAGES_EN = {
-  dmVipActiveForever: '✅ VIP activated — {tariff} ⭐',
-  dmVipActiveTimed: '✅ VIP activated — {tariff}\n⏳ Active until: <t:{expiresAt}:F>',
+  dmVipActiveForever: '👑 **VIP activated forever** — {tariff} ⭐\n\nWelcome to the SWAGA elite. You now have exclusive skins, unique weapons and priority access — on both servers.\n\n🎮 Get in and dominate.',
+  dmVipActiveTimed: '👑 **VIP activated** — {tariff}\n⏳ Active until: <t:{expiresAt}:F>\n\nWelcome to the SWAGA elite. You now have exclusive skins, unique weapons and priority access — on both servers.\n\n🎮 Get in and dominate.',
   dmRoleActivated: '✅ Role "{roleName}" activated.',
   dmMissingLink:
-    '⚠️ Role "{roleName}" detected, but SteamID64 is missing.\nLink your SteamID via /steamid or /link.',
-  dmExpiryWarning: '⏰ VIP expires soon — {tariff}\n📅 Ends: <t:{expiresAt}:F>',
+    '👑 **VIP received!**\n\nTo activate your perks on the server, link your Steam account:\n\n1️⃣ Use `/steamid` command with your SteamID64\n2️⃣ Or open a ticket and we\'ll help\n\n-# Don\'t know your SteamID64? Find it at [steamid.io](https://steamid.io)',
+  dmExpiryWarningEarly: '👀 **{tariff} expires in 3 days**\n📅 Ends: <t:{expiresAt}:F>\n\nStill time to renew without rushing:\n💳 **$4.99**/14 days • **$10.50**/month • **$23.50**/lifetime\n\n👉 **[Renew VIP](<https://discord.com/channels/1348440636885438634/1350468455157203058>)**',
+  dmExpiryWarning: '⚠️ **{tariff} expires in 24 hours**\n📅 Ends: <t:{expiresAt}:F>\n\nYou will lose access to exclusive skins, unique weapons and priority server access.\n\n🔥 Renew right now:\n💳 **$4.99**/14 days • **$10.50**/month • **$23.50**/lifetime\n\n👉 **[Renew VIP](<https://discord.com/channels/1348440636885438634/1350468455157203058>)**',
   dmVipExpired:
-    '❌ **VIP expired**\n⚠️ Disabled: **VIP perks**.\n⏳ Renew within **24 hours** to get a discount:\n💳 $4.99/14d • ~~$9.99~~ **$8.99/month** • ~~$22.99~~ **$19.99/lifetime**\n✅ Renew: **[create a ticket](<https://discord.com/channels/1348440636885438634/1350468455157203058>)**',
+    '😔 **VIP expired** — {tariff}\n\nYour exclusive skins and weapons are gone. Other VIP players are outclassing you right now.\n\n⚡ Renew within **24 hours** and get a discount:\n💳 **$4.99**/14 days • ~~$10.50~~ **$8.99**/month • ~~$23.50~~ **$19.99**/lifetime\n\n👉 **[Get VIP back at a discount](<https://discord.com/channels/1348440636885438634/1350468455157203058>)**',
+  dmVipRemoved: '❌ **VIP removed**\nReason: {reason}\n\n👉 If you think this is a mistake — **[open a ticket](<https://discord.com/channels/1348440636885438634/1350468455157203058>)**',
+  vipRemoveReasonRoleRemoved: 'VIP role was removed manually.',
+  vipRemoveReasonAdmin: 'Removed by administrator {admin}.',
+  vipRemoveReasonApi: 'Removed via API.',
+  vipRemoveReasonLeftGuild: 'You left the Discord server.',
+  vipRemoveReasonStartupCheck:
+    'Your account was not found on the server during startup check.',
   statusLoading: '⏳ Data is still loading. Please try again later.',
   statusNoLink: '❗ SteamID64 was not found for your account.\nLink your SteamID via /steamid or /link.',
   statusInactive: '❌ VIP is not active.',
@@ -233,6 +258,10 @@ const AUDIT_LABELS_RU = {
   command_removevip: 'Команда: снятие VIP',
   command_setvip: 'Команда: установка срока VIP',
   everyone_timeout: 'Анти-@everyone: тайм-аут',
+  ticket_open: 'Тикет открыт',
+  ticket_close: 'Тикет закрыт',
+  ticket_panel: 'Панель тикетов размещена',
+  ticket_delete: 'Тикет удален',
 };
 
 const AUDIT_LABELS_EN = {
@@ -253,6 +282,10 @@ const AUDIT_LABELS_EN = {
   command_removevip: 'Command: remove VIP',
   command_setvip: 'Command: set VIP expiration',
   everyone_timeout: 'Anti-@everyone: timeout',
+  ticket_open: 'Ticket opened',
+  ticket_close: 'Ticket closed',
+  ticket_panel: 'Ticket panel posted',
+  ticket_delete: 'Ticket deleted',
 };
 
 const AUDIT_FIELDS_RU = {
@@ -306,12 +339,12 @@ const ROLE_REMOVE_REASON_BY_LANG = {
 const STATUS_COMMAND = new SlashCommandBuilder()
   .setName('status')
   .setDescription('Check VIP status')
-  .setDMPermission(false);
+  .setDMPermission(true);
 
 const STEAMID_COMMAND = new SlashCommandBuilder()
   .setName('steamid')
   .setDescription('Link SteamID64')
-  .setDMPermission(false)
+  .setDMPermission(true)
   .addStringOption((option) =>
     option
       .setName('steamid')
@@ -385,10 +418,48 @@ const SETVIP_COMMAND = new SlashCommandBuilder()
   });
 
 const STATS_COMMAND = new SlashCommandBuilder()
-  .setName('stats')
+  .setName('vipstats')
   .setDescription('VIP stats')
   .setDMPermission(false)
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles);
+
+const PLAYERSTATS_COMMAND = new SlashCommandBuilder()
+  .setName('stats')
+  .setDescription('Show player statistics card by SteamID64')
+  .setDMPermission(false)
+  .addStringOption((option) =>
+    option
+      .setName('steamid')
+      .setDescription('SteamID64 (17 digits)')
+      .setRequired(true)
+  );
+
+function configurePlayerStatsServerOption(commandBuilder, leaderboardConfig) {
+  const servers = Array.isArray(leaderboardConfig?.servers)
+    ? leaderboardConfig.servers
+        .filter((entry) => String(entry?.cfCloudServerId || '').trim())
+        .map((entry, index) => ({
+          key: String(entry?.key || `s${index + 1}`).trim(),
+          name: String(entry?.name || entry?.key || `server${index + 1}`).trim(),
+        }))
+        .filter((entry) => entry.key)
+    : [];
+
+  commandBuilder.addStringOption((option) => {
+    option
+      .setName('server')
+      .setDescription('Server key (optional)')
+      .setRequired(false);
+    if (servers.length > 0 && servers.length <= 25) {
+      for (const entry of servers) {
+        const label = `${entry.name} [${entry.key}]`.slice(0, 100);
+        option.addChoices({ name: label, value: entry.key.slice(0, 100) });
+      }
+    }
+    return option;
+  });
+  return commandBuilder;
+}
 
 const REMOVEVIP_COMMAND = new SlashCommandBuilder()
   .setName('removevip')
@@ -419,7 +490,7 @@ const GIVEVIP_COMMAND = new SlashCommandBuilder()
 const PROFILE_COMMAND = new SlashCommandBuilder()
   .setName('profile')
   .setDescription('View your VIP profile')
-  .setDMPermission(false);
+  .setDMPermission(true);
 
 const SERVERINFO_COMMAND = new SlashCommandBuilder()
   .setName('serverinfo')
@@ -427,9 +498,28 @@ const SERVERINFO_COMMAND = new SlashCommandBuilder()
   .setDMPermission(false)
   .setDefaultMemberPermissions(PermissionFlagsBits.Administrator);
 
+const TICKETPANEL_COMMAND = new SlashCommandBuilder()
+  .setName('ticketpanel')
+  .setDescription('Post ticket panel in current channel')
+  .setDMPermission(false)
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles);
+
+const CLOSE_TICKET_COMMAND = new SlashCommandBuilder()
+  .setName('close')
+  .setDescription('Close current ticket')
+  .setDMPermission(false);
+
+const DELETE_TICKET_COMMAND = new SlashCommandBuilder()
+  .setName('delete')
+  .setDescription('Delete current ticket')
+  .setDMPermission(false)
+  .setDefaultMemberPermissions(PermissionFlagsBits.Administrator);
+
 const config = loadConfig();
+const statsCard = new StatsCard(config);
 const DEFAULT_LANGUAGE = normalizeLanguage(config.language, 'ru');
 const LEADERBOARD_CONFIG = normalizeLeaderboardConfig(config.leaderboard);
+configurePlayerStatsServerOption(PLAYERSTATS_COMMAND, LEADERBOARD_CONFIG);
 const LEADERBOARD_ENABLED = LEADERBOARD_CONFIG.enabled;
 const AUDIT_LABELS = AUDIT_LABELS_BY_LANG[DEFAULT_LANGUAGE] || AUDIT_LABELS_RU;
 const AUDIT_FIELDS = AUDIT_FIELDS_BY_LANG[DEFAULT_LANGUAGE] || AUDIT_FIELDS_RU;
@@ -461,6 +551,10 @@ const AUDIT_ACTIONS = new Set([
   'command_removevip',
   'command_setvip',
   'everyone_timeout',
+  'ticket_open',
+  'ticket_close',
+  'ticket_panel',
+  'ticket_delete',
 ]);
 
 logStartupInfo(config, servers, primaryServer);
@@ -595,6 +689,15 @@ function normalizeConfig(raw) {
     throw new Error('config.json api.token is required when api.enabled=true');
   }
   config.api = api;
+  const ticketsCfg = config.tickets && typeof config.tickets === 'object' ? config.tickets : {};
+  config.tickets = {
+    categoryId: String(ticketsCfg.categoryId || '').trim(),
+    archiveCategoryId: String(
+      ticketsCfg.archiveCategoryId || ticketsCfg.categoryId || ''
+    ).trim(),
+    panelChannelId: String(ticketsCfg.panelChannelId || '').trim(),
+    supportRoleId: String(ticketsCfg.supportRoleId || '').trim(),
+  };
   return config;
 }
 
@@ -912,11 +1015,18 @@ function getAuditColor(action) {
       return 0x2ecc71;
     case 'expire_warn':
       return 0xf1c40f;
+    case 'ticket_open':
+      return 0x5865f2;
+    case 'ticket_panel':
+      return 0x57f287;
+    case 'ticket_close':
+      return 0x747f8d;
     case 'manual_remove':
     case 'expire_remove':
     case 'command_removevip':
     case 'media_remove':
     case 'everyone_timeout':
+    case 'ticket_delete':
       return 0xe74c3c;
     case 'link_set':
     case 'link_remove':
@@ -1150,6 +1260,9 @@ function normalizeBotDb(data) {
   if (!Array.isArray(normalized.history)) {
     normalized.history = [];
   }
+  if (!normalized.tickets || typeof normalized.tickets !== 'object') {
+    normalized.tickets = {};
+  }
   return normalized;
 }
 
@@ -1168,6 +1281,7 @@ function createBaseBotDb() {
     locales: {},
     vipTimed: {},
     history: [],
+    tickets: {},
   };
 }
 
@@ -1177,6 +1291,7 @@ function extractSettingsPayload(data) {
   delete settings.locales;
   delete settings.vipTimed;
   delete settings.history;
+  delete settings.tickets;
   delete settings.newera;
   delete settings.media;
   return normalizeSettingsDb(settings);
@@ -1188,6 +1303,7 @@ function extractMetaPayload(data) {
     locales: data?.locales,
     vipTimed: data?.vipTimed,
     history: data?.history,
+    tickets: data?.tickets,
   });
 }
 
@@ -1203,7 +1319,10 @@ function hasMetaDataInSettings(data) {
     ? Object.keys(data.vipTimed).length
     : 0;
   const history = Array.isArray(data.history) ? data.history.length : 0;
-  return links + locales + vipTimed + history > 0;
+  const tickets = data.tickets && typeof data.tickets === 'object'
+    ? Object.keys(data.tickets).length
+    : 0;
+  return links + locales + vipTimed + history + tickets > 0;
 }
 
 function hasMetaFieldsInSettings(data) {
@@ -1214,7 +1333,8 @@ function hasMetaFieldsInSettings(data) {
     Object.prototype.hasOwnProperty.call(data, 'links') ||
     Object.prototype.hasOwnProperty.call(data, 'locales') ||
     Object.prototype.hasOwnProperty.call(data, 'vipTimed') ||
-    Object.prototype.hasOwnProperty.call(data, 'history')
+    Object.prototype.hasOwnProperty.call(data, 'history') ||
+    Object.prototype.hasOwnProperty.call(data, 'tickets')
   );
 }
 
@@ -1230,7 +1350,10 @@ function isMetaEmpty(meta) {
     ? Object.keys(meta.vipTimed).length
     : 0;
   const history = Array.isArray(meta.history) ? meta.history.length : 0;
-  return links + locales + vipTimed + history === 0;
+  const tickets = meta.tickets && typeof meta.tickets === 'object'
+    ? Object.keys(meta.tickets).length
+    : 0;
+  return links + locales + vipTimed + history + tickets === 0;
 }
 
 function mergeMetaIntoBotDb(base, incoming) {
@@ -1262,6 +1385,13 @@ function mergeMetaIntoBotDb(base, incoming) {
     if (Array.isArray(incoming.history) && incoming.history.length > 0) {
       if (!Array.isArray(normalized.history) || normalized.history.length === 0) {
         normalized.history = [...incoming.history];
+        changed = true;
+      }
+    }
+
+    for (const [channelId, record] of Object.entries(incoming.tickets || {})) {
+      if (!normalized.tickets[channelId]) {
+        normalized.tickets[channelId] = record;
         changed = true;
       }
     }
@@ -1896,6 +2026,7 @@ function startApiServer() {
 
       if (target.discordId) {
         await removeDiscordVipRoles(target.discordId, 'VIP removed via API');
+        await notifyVipRemoved(target.discordId, 'api');
       }
 
       await logAction('api_removevip', {
@@ -2232,16 +2363,17 @@ function buildVipEmbed(roleName, expiresAt, language) {
     .setColor(0xffffff);
 }
 
-function buildExpiryWarningEmbed(roleName, expiresAt, language) {
+function buildExpiryWarningEmbed(roleName, expiresAt, language, thresholdSeconds) {
   const messages = getMessagesForLanguage(language);
+  const isEarly = thresholdSeconds > 86400;
   return new EmbedBuilder()
     .setDescription(
-      formatMessage(messages.dmExpiryWarning, {
+      formatMessage(isEarly ? messages.dmExpiryWarningEarly : messages.dmExpiryWarning, {
         tariff: formatTariffDisplay(roleName, language),
         expiresAt,
       })
     )
-    .setColor(0xffa940);
+    .setColor(isEarly ? 0x378add : 0xffa940);
 }
 
 function buildVipExpiredEmbed(roleName, language) {
@@ -2253,6 +2385,47 @@ function buildVipExpiredEmbed(roleName, language) {
       })
     )
     .setColor(0xff4d4f);
+}
+
+function resolveVipRemovalReason(language, reasonCode, context = {}) {
+  const messages = getMessagesForLanguage(language);
+  switch (reasonCode) {
+    case 'admin':
+      return formatMessage(messages.vipRemoveReasonAdmin, {
+        admin: context.admin || 'unknown',
+      });
+    case 'api':
+      return messages.vipRemoveReasonApi;
+    case 'left_guild':
+      return messages.vipRemoveReasonLeftGuild;
+    case 'startup_check':
+      return messages.vipRemoveReasonStartupCheck;
+    case 'role_removed':
+    default:
+      return messages.vipRemoveReasonRoleRemoved;
+  }
+}
+
+function buildVipRemovedEmbed(language, reasonCode, context = {}) {
+  const messages = getMessagesForLanguage(language);
+  const reason = resolveVipRemovalReason(language, reasonCode, context);
+  return new EmbedBuilder()
+    .setDescription(
+      formatMessage(messages.dmVipRemoved, {
+        reason,
+      })
+    )
+    .setColor(0xff4d4f);
+}
+
+async function notifyVipRemoved(discordId, reasonCode, context = {}) {
+  if (!discordId) {
+    return;
+  }
+  const language = resolveUserLanguage(discordId, primaryGuild?.preferredLocale);
+  await sendDmToUserId(discordId, {
+    embeds: [buildVipRemovedEmbed(language, reasonCode, context)],
+  });
 }
 
 function buildRoleActivatedEmbed(roleName, language) {
@@ -2377,6 +2550,7 @@ async function handleVipRoleRemoved(member, roleName) {
   });
 
   await persistAndSync();
+  await notifyVipRemoved(discordId, 'role_removed');
 
   await logAction('manual_remove', {
     discordId,
@@ -2630,7 +2804,7 @@ async function notifyVipExpiring(steam64, record, thresholdSeconds) {
 
   const language = resolveUserLanguage(discordId, primaryGuild?.preferredLocale);
   await sendDmToUserId(discordId, {
-    embeds: [buildExpiryWarningEmbed(record.roleName || 'VIP', record.expiresAt, language)],
+    embeds: [buildExpiryWarningEmbed(record.roleName || 'VIP', record.expiresAt, language, thresholdSeconds)],
   });
 
   await logAction('expire_warn', {
@@ -2836,6 +3010,819 @@ function startDailyBackup() {
   console.log('[backup] Daily backup scheduled.');
 }
 
+function getTicketConfig() {
+  return config.tickets || {};
+}
+
+function getTicketMessages(language) {
+  const normalized = normalizeLanguage(language, DEFAULT_LANGUAGE);
+  if (normalized === 'en') {
+    return {
+      missingConfig: '⚠️ Ticket system is not configured. Contact an administrator.',
+      ticketCreated: '✅ Ticket created: <#{channelId}>',
+      ticketAlreadyExists: 'ℹ️ You already have an open ticket: <#{channelId}>',
+      ticketCreateFailed: '⚠️ Failed to create ticket. Check bot permissions.',
+      notTicketChannel: '⚠️ This channel is not a ticket.',
+      ticketClosed: '✅ Ticket closed.',
+      noPermDelete: '🚫 Only administrators can delete tickets.',
+      ticketDeleted: '✅ Ticket deleted.',
+      ticketDeleteFailed: '⚠️ Failed to delete ticket channel.',
+      noPermPanel: '🚫 Not enough permissions.',
+      panelPosted: '✅ Ticket panel posted in <#{channelId}>.',
+      panelPostFailed: '⚠️ Failed to post ticket panel.',
+      modalTitle: 'Open ticket',
+      modalSteamLabel: 'Your SteamID64',
+      modalSteamPlaceholder: '7656119xxxxxxxxxx',
+      noVip: '❌ No VIP',
+      vipForever: '✅ Forever',
+      vipExpired: '❌ Expired',
+      vipUntil: '✅ Until <t:{expiresAt}:F>',
+      tariffField: 'Tariff',
+      supportTitle: '📩 SWAGA Support',
+      supportDescription:
+        'Choose a language and press the button below to open a ticket.\n\n' +
+        '> The ticket is visible only to you and the support team.',
+      supportFooter: 'SWAGA Support',
+      openTitle: '🎫 New ticket',
+      openDescription:
+        'Describe your issue or question. A support member will reply as soon as possible.',
+      closeTitle: '🔒 Ticket closed',
+      closeDescription:
+        'Ticket was closed by <@{closedBy}>.\nThe channel has been moved to archive mode.',
+      autoCloseTitle: '🔒 Ticket closed automatically',
+      autoCloseDescription:
+        'Ticket was closed automatically because no message from ticket owner was sent within 5 minutes.',
+      closeButton: '🔒 Close ticket',
+      createButtonRu: 'Ticket (RU)',
+      createButtonEn: 'Make a ticket',
+      fieldDiscord: 'Discord',
+      fieldSteam: 'SteamID64',
+      fieldVip: 'VIP',
+    };
+  }
+
+  return {
+    missingConfig: '⚠️ Тикет-система не настроена. Свяжитесь с администратором.',
+    ticketCreated: '✅ Тикет создан: <#{channelId}>',
+    ticketAlreadyExists: 'ℹ️ У вас уже есть открытый тикет: <#{channelId}>',
+    ticketCreateFailed: '⚠️ Не удалось создать тикет. Проверьте права бота.',
+    notTicketChannel: '⚠️ Этот канал не является тикетом.',
+    ticketClosed: '✅ Тикет закрыт.',
+    noPermDelete: '🚫 Удалять тикеты могут только администраторы.',
+    ticketDeleted: '✅ Тикет удалён.',
+    ticketDeleteFailed: '⚠️ Не удалось удалить тикет-канал.',
+    noPermPanel: '🚫 Недостаточно прав.',
+    panelPosted: '✅ Панель тикетов размещена в <#{channelId}>.',
+    panelPostFailed: '⚠️ Не удалось разместить панель тикетов.',
+    modalTitle: 'Открытие тикета',
+    modalSteamLabel: 'Ваш SteamID64',
+    modalSteamPlaceholder: '7656119xxxxxxxxxx',
+    noVip: '❌ Нет VIP',
+    vipForever: '✅ Навсегда',
+    vipExpired: '❌ Истёк',
+    vipUntil: '✅ До <t:{expiresAt}:F>',
+    tariffField: 'Тариф',
+    supportTitle: '📩 Поддержка SWAGA',
+    supportDescription:
+      'Выберите язык и нажмите кнопку ниже, чтобы открыть тикет.\n\n' +
+      '> Тикет увидят только вы и команда администраторов.',
+    supportFooter: 'SWAGA Support',
+    openTitle: '🎫 Новый тикет',
+    openDescription:
+      'Опишите вашу проблему или вопрос. Администратор ответит в ближайшее время.',
+    closeTitle: '🔒 Тикет закрыт',
+    closeDescription:
+      'Тикет закрыт пользователем <@{closedBy}>.\nКанал переведён в режим архива.',
+    autoCloseTitle: '🔒 Тикет закрыт автоматически',
+    autoCloseDescription:
+      'Тикет автоматически закрыт, потому что владелец не отправил ни одного сообщения в течение 5 минут.',
+    closeButton: '🔒 Закрыть тикет',
+    createButtonRu: 'Создать тикет',
+    createButtonEn: 'Make a ticket',
+    fieldDiscord: 'Discord',
+    fieldSteam: 'SteamID64',
+    fieldVip: 'VIP',
+  };
+}
+
+function buildCfToolsProfileUrl(steam64) {
+  return `https://app.cftools.cloud/profile/${encodeURIComponent(String(steam64 || '').trim())}`;
+}
+
+function formatTicketSteamFieldValue(steam64) {
+  if (!steam64) {
+    return '-';
+  }
+  const normalized = String(steam64).trim();
+  if (!isValidSteamId64(normalized)) {
+    return normalized;
+  }
+  const profileUrl = buildCfToolsProfileUrl(normalized);
+  return `<${profileUrl}>\n${normalized}`;
+}
+
+function buildTicketOpenEmbed(member, steam64, language) {
+  const ticketMessages = getTicketMessages(language);
+  const fields = [
+    {
+      name: ticketMessages.fieldDiscord,
+      value: `<@${member.id}> (${member.id})`,
+      inline: true,
+    },
+    {
+      name: ticketMessages.fieldSteam,
+      value: formatTicketSteamFieldValue(steam64),
+      inline: true,
+    },
+  ];
+
+  return new EmbedBuilder()
+    .setTitle(ticketMessages.openTitle)
+    .setColor(0x5865f2)
+    .setDescription(ticketMessages.openDescription)
+    .addFields(fields)
+    .setTimestamp();
+}
+
+function buildTicketPanelEmbed(language) {
+  const ticketMessages = getTicketMessages(language);
+  return new EmbedBuilder()
+    .setTitle(ticketMessages.supportTitle)
+    .setColor(0x5865f2)
+    .setDescription(ticketMessages.supportDescription)
+    .setFooter({ text: ticketMessages.supportFooter })
+    .setTimestamp();
+}
+
+function buildTicketClosedEmbed(closedBy, language) {
+  const ticketMessages = getTicketMessages(language);
+  return new EmbedBuilder()
+    .setTitle(ticketMessages.closeTitle)
+    .setColor(0x747f8d)
+    .setDescription(
+      formatMessage(ticketMessages.closeDescription, {
+        closedBy,
+      })
+    )
+    .setTimestamp();
+}
+
+function buildTicketAutoClosedEmbed(language) {
+  const ticketMessages = getTicketMessages(language);
+  return new EmbedBuilder()
+    .setTitle(ticketMessages.autoCloseTitle)
+    .setColor(0x747f8d)
+    .setDescription(ticketMessages.autoCloseDescription)
+    .setTimestamp();
+}
+
+function buildCloseButtonRow(language) {
+  const ticketMessages = getTicketMessages(language);
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('ticket_close')
+      .setLabel(ticketMessages.closeButton)
+      .setStyle(ButtonStyle.Danger)
+  );
+}
+
+function buildOpenButtonRow() {
+  const ticketMessagesRu = getTicketMessages('ru');
+  const ticketMessagesEn = getTicketMessages('en');
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('ticket_create_ru')
+      .setLabel(ticketMessagesRu.createButtonRu)
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId('ticket_create_en')
+      .setLabel(ticketMessagesEn.createButtonEn)
+      .setStyle(ButtonStyle.Secondary)
+  );
+}
+
+function buildTicketCreateModal(language, steam64) {
+  const ticketMessages = getTicketMessages(language);
+  const steamInput = new TextInputBuilder()
+    .setCustomId('ticket_steam64')
+    .setLabel(ticketMessages.modalSteamLabel)
+    .setPlaceholder(ticketMessages.modalSteamPlaceholder)
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setMinLength(17)
+    .setMaxLength(17);
+  if (steam64) {
+    steamInput.setValue(steam64);
+  }
+  return new ModalBuilder()
+    .setCustomId(`ticket_create_modal_${language}`)
+    .setTitle(ticketMessages.modalTitle)
+    .addComponents(new ActionRowBuilder().addComponents(steamInput));
+}
+
+async function showTicketCreateModal(interaction, forcedLanguage = null) {
+  const fallbackLanguage = resolveUserLanguage(interaction.user.id, interaction.guild?.preferredLocale);
+  const language = forcedLanguage
+    ? normalizeLanguage(forcedLanguage, fallbackLanguage)
+    : fallbackLanguage;
+  const linkedSteam = getLinkedSteamId(interaction.user.id);
+  if (linkedSteam) {
+    await handleTicketCreate(interaction, language);
+    return;
+  }
+  const modal = buildTicketCreateModal(language, linkedSteam);
+  await interaction.showModal(modal);
+}
+
+async function saveSteamLinkFromTicketModal(interaction, steam64, language) {
+  const messages = getMessagesForLanguage(language);
+  let outcome = 'unchanged';
+  let deniedMessage = '';
+  await enqueueOperation(async () => {
+    const discordId = interaction.user.id;
+    const existingLink = getLinkedSteamId(discordId);
+    if (existingLink && existingLink !== steam64) {
+      deniedMessage = messages.steamidAlreadyLinked;
+      outcome = 'denied';
+      await logAction('link_update_denied', {
+        serverName: primaryServer.name,
+        discordId,
+        steam64,
+        roleName: null,
+        expiresAt: null,
+        note: 'ticket_modal_existing_link',
+      });
+      return;
+    }
+
+    const existingOwner = findDiscordIdBySteam(steam64);
+    if (existingOwner && existingOwner !== discordId) {
+      deniedMessage = messages.steamidOwned;
+      outcome = 'denied';
+      await logAction('link_update_denied', {
+        serverName: primaryServer.name,
+        discordId,
+        steam64,
+        roleName: null,
+        expiresAt: null,
+        note: `ticket_modal_owned_by=${existingOwner}`,
+      });
+      return;
+    }
+
+    if (existingLink === steam64) {
+      outcome = 'unchanged';
+      return;
+    }
+
+    db.links[discordId] = steam64;
+    invalidLinks.delete(discordId);
+    addHistory('link_set', {
+      discordId,
+      steam64,
+      roleName: null,
+      expiresAt: null,
+      note: 'ticket_modal',
+    });
+    await savePrimaryDb();
+    outcome = 'saved';
+    await logAction('link_set', {
+      serverName: primaryServer.name,
+      discordId,
+      steam64,
+      roleName: null,
+      expiresAt: null,
+      note: 'ticket_modal',
+    });
+  });
+
+  if (outcome === 'denied') {
+    return { ok: false, message: deniedMessage };
+  }
+
+  if (outcome === 'saved') {
+    try {
+      const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+      if (member) {
+        await assignMemberRole(member);
+      }
+    } catch (err) {
+      // Do not fail ticket creation when role assignment fails.
+    }
+  }
+
+  return { ok: true };
+}
+
+async function handleTicketCreateModalSubmit(interaction) {
+  const forcedLanguage = interaction.customId.endsWith('_en') ? 'en' : 'ru';
+  const fallbackLanguage = resolveUserLanguage(interaction.user.id, interaction.guild?.preferredLocale);
+  const language = normalizeLanguage(forcedLanguage, fallbackLanguage);
+  const messages = getMessagesForLanguage(language);
+  const steam64 = normalizeSteamId64(interaction.fields.getTextInputValue('ticket_steam64'));
+  if (!isValidSteamId64(steam64)) {
+    await interaction.reply({
+      content: messages.invalidSteamId,
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const saveResult = await saveSteamLinkFromTicketModal(interaction, steam64, language);
+  if (!saveResult.ok) {
+    await interaction.reply({
+      content: saveResult.message || messages.genericError,
+      ephemeral: true,
+    });
+    return;
+  }
+
+  await handleTicketCreate(interaction, language);
+}
+
+function getVipStatusLabel(steam64, language) {
+  const ticketMessages = getTicketMessages(language);
+  if (!steam64 || !db) {
+    return ticketMessages.noVip;
+  }
+  const steamKey = String(steam64);
+  const now = unixNow();
+  const inWhitelist = db.whiteList?.vip?.includes(steamKey);
+  if (!inWhitelist) {
+    return ticketMessages.noVip;
+  }
+  const timedRecord = db.vipTimed?.[steamKey];
+  if (!timedRecord) {
+    return ticketMessages.vipForever;
+  }
+  const expiresAt = Number(timedRecord.expiresAt) || 0;
+  if (expiresAt === 0) {
+    return ticketMessages.vipForever;
+  }
+  if (expiresAt < now) {
+    return ticketMessages.vipExpired;
+  }
+  return formatMessage(ticketMessages.vipUntil, { expiresAt });
+}
+
+function getTariffLabelForSteam(steam64, language) {
+  if (!steam64 || !db) {
+    return null;
+  }
+  const steamKey = String(steam64);
+  const timedRecord = db.vipTimed?.[steamKey];
+  const roleName = timedRecord?.roleName;
+  if (!roleName) {
+    return null;
+  }
+  return formatTariffDisplay(roleName, language);
+}
+
+function buildSafeChannelName(username) {
+  const normalized = String(username || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 24);
+  return `ticket-${normalized || 'user'}`;
+}
+
+function getTicketRecordForUser(discordId) {
+  if (!db?.tickets || !discordId) {
+    return null;
+  }
+  for (const [channelId, ticket] of Object.entries(db.tickets)) {
+    if (ticket?.discordId === discordId && !ticket?.closedAt) {
+      return { channelId, ticket };
+    }
+  }
+  return null;
+}
+
+async function handleTicketCreate(interaction, forcedLanguage = null) {
+  if (!interaction.inGuild()) {
+    return;
+  }
+
+  const fallbackLanguage = resolveUserLanguage(interaction.user.id, interaction.guild?.preferredLocale);
+  const language = forcedLanguage
+    ? normalizeLanguage(forcedLanguage, fallbackLanguage)
+    : fallbackLanguage;
+  rememberUserLanguage(interaction.user.id, language);
+  const ticketMessages = getTicketMessages(language);
+  const ticketConfig = getTicketConfig();
+  if (!ticketConfig.categoryId) {
+    await interaction.reply({
+      content: ticketMessages.missingConfig,
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const existingTicket = getTicketRecordForUser(interaction.user.id);
+  if (existingTicket) {
+    await interaction.reply({
+      content: formatMessage(ticketMessages.ticketAlreadyExists, {
+        channelId: existingTicket.channelId,
+      }),
+      ephemeral: true,
+    });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const guild = interaction.guild;
+  const discordId = interaction.user.id;
+  const steam64 = getLinkedSteamId(discordId);
+  const permissionOverwrites = [
+    {
+      id: guild.roles.everyone.id,
+      deny: [PermissionFlagsBits.ViewChannel],
+    },
+    {
+      id: discordId,
+      allow: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ReadMessageHistory,
+        PermissionFlagsBits.AttachFiles,
+      ],
+    },
+  ];
+
+  if (ticketConfig.supportRoleId) {
+    permissionOverwrites.push({
+      id: ticketConfig.supportRoleId,
+      allow: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ReadMessageHistory,
+        PermissionFlagsBits.ManageChannels,
+      ],
+    });
+  }
+
+  let channel;
+  try {
+    channel = await guild.channels.create({
+      name: buildSafeChannelName(interaction.user.username),
+      type: ChannelType.GuildText,
+      parent: ticketConfig.categoryId,
+      permissionOverwrites,
+      reason: `Ticket by ${interaction.user.tag}`,
+    });
+  } catch (err) {
+    console.error('[tickets] Failed to create channel:', err?.message || err);
+    await interaction.editReply({ content: ticketMessages.ticketCreateFailed });
+    return;
+  }
+
+  if (!db.tickets || typeof db.tickets !== 'object') {
+    db.tickets = {};
+  }
+  db.tickets[channel.id] = {
+    discordId,
+    steam64: steam64 || null,
+    openedAt: unixNow(),
+    language,
+    firstUserMessageAt: null,
+    supportNotifiedAt: null,
+  };
+  await enqueueBotDbSave(extractMetaPayload(db));
+
+  const ticketEmbed = buildTicketOpenEmbed(interaction.user, steam64, language);
+  const closeRow = buildCloseButtonRow(language);
+
+  await channel.send({
+    content: `<@${discordId}>`,
+    allowedMentions: {
+      users: [discordId],
+    },
+    embeds: [ticketEmbed],
+    components: [closeRow],
+  });
+
+  await interaction.editReply({
+    content: formatMessage(ticketMessages.ticketCreated, {
+      channelId: channel.id,
+    }),
+  });
+
+  await logAction('ticket_open', {
+    serverName: primaryServer.name,
+    discordId,
+    steam64: steam64 || null,
+    roleName: null,
+    expiresAt: null,
+    note: `channel=${channel.id}`,
+  });
+}
+
+async function closeTicketChannel(channel, ticketRecord, options = {}) {
+  if (!ticketRecord || ticketRecord.closedAt) {
+    return;
+  }
+
+  const reason = String(options.reason || 'manual');
+  const closedBy = String(options.closedBy || client.user?.id || 'system');
+  const guildLocale = channel?.guild?.preferredLocale || primaryGuild?.preferredLocale;
+  const ticketLanguage = normalizeLanguage(
+    ticketRecord.language,
+    resolveUserLanguage(ticketRecord.discordId, guildLocale)
+  );
+  const ticketConfig = getTicketConfig();
+  ticketRecord.closedAt = unixNow();
+  ticketRecord.closedBy = closedBy;
+  ticketRecord.closeReason = reason;
+  await enqueueBotDbSave(extractMetaPayload(db));
+
+  if (channel && channel.isTextBased()) {
+    try {
+      const closeEmbed = reason === 'inactive_timeout'
+        ? buildTicketAutoClosedEmbed(ticketLanguage)
+        : buildTicketClosedEmbed(closedBy, ticketLanguage);
+      await channel.send({
+        embeds: [closeEmbed],
+      });
+    } catch (err) {
+      console.warn('[tickets] Failed to send close message:', err?.message || err);
+    }
+
+    try {
+      await channel.permissionOverwrites.edit(ticketRecord.discordId, {
+        ViewChannel: false,
+        SendMessages: false,
+        ReadMessageHistory: false,
+      });
+    } catch (err) {
+      console.warn('[tickets] Failed to revoke ticket owner write access:', err?.message || err);
+    }
+
+    const archiveCategoryId = ticketConfig.archiveCategoryId || ticketConfig.categoryId;
+    if (archiveCategoryId && archiveCategoryId !== channel.parentId) {
+      try {
+        await channel.setParent(archiveCategoryId, {
+          lockPermissions: false,
+          reason: 'Ticket archived',
+        });
+      } catch (err) {
+        console.warn('[tickets] Failed to move ticket to archive category:', err?.message || err);
+      }
+    }
+
+    try {
+      const baseName = String(channel.name || '').replace(/^(closed-)+/, '');
+      await channel.setName(`closed-${baseName}`, 'Ticket closed');
+    } catch (err) {
+      console.warn('[tickets] Failed to rename ticket channel:', err?.message || err);
+    }
+  }
+
+  await logAction('ticket_close', {
+    serverName: primaryServer.name,
+    discordId: ticketRecord.discordId || null,
+    steam64: ticketRecord.steam64 || null,
+    roleName: null,
+    expiresAt: null,
+    note: `channel=${channel?.id || '-'} by=${closedBy} reason=${reason}`,
+  });
+}
+
+async function handleTicketClose(interaction) {
+  if (!interaction.inGuild()) {
+    return;
+  }
+
+  const ticketMessages = getTicketMessages(
+    resolveUserLanguage(interaction.user.id, interaction.guild?.preferredLocale)
+  );
+  const channel = interaction.channel;
+  const ticketRecord = db.tickets?.[channel?.id];
+  if (!ticketRecord) {
+    await interaction.reply({
+      content: ticketMessages.notTicketChannel,
+      ephemeral: true,
+    });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+  await closeTicketChannel(channel, ticketRecord, {
+    reason: 'manual',
+    closedBy: interaction.user.id,
+  });
+
+  await interaction.editReply({
+    content: ticketMessages.ticketClosed,
+  });
+}
+
+async function handleTicketPanelCommand(interaction, language) {
+  const ticketMessages = getTicketMessages(language);
+  if (!hasManageRoles(interaction)) {
+    await interaction.reply({
+      content: ticketMessages.noPermPanel,
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const ticketConfig = getTicketConfig();
+  let targetChannel = interaction.channel;
+  if (ticketConfig.panelChannelId) {
+    const configuredChannel = await interaction.guild.channels
+      .fetch(ticketConfig.panelChannelId)
+      .catch(() => null);
+    if (configuredChannel?.isTextBased()) {
+      targetChannel = configuredChannel;
+    }
+  }
+
+  const panelEmbed = buildTicketPanelEmbed(language);
+  const openRow = buildOpenButtonRow();
+
+  try {
+    await targetChannel.send({
+      embeds: [panelEmbed],
+      components: [openRow],
+    });
+  } catch (err) {
+    await interaction.reply({
+      content: ticketMessages.panelPostFailed,
+      ephemeral: true,
+    });
+    return;
+  }
+
+  await interaction.reply({
+    content: formatMessage(ticketMessages.panelPosted, {
+      channelId: targetChannel.id,
+    }),
+    ephemeral: true,
+  });
+
+  await logAction('ticket_panel', {
+    serverName: primaryServer.name,
+    discordId: interaction.user.id,
+    steam64: null,
+    roleName: null,
+    expiresAt: null,
+    note: `channel=${targetChannel.id}`,
+  });
+}
+
+async function handleTicketDeleteCommand(interaction, language) {
+  const ticketMessages = getTicketMessages(language);
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+    await interaction.reply({
+      content: ticketMessages.noPermDelete,
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const channel = interaction.channel;
+  const channelId = channel?.id;
+  const ticketRecord = channelId ? db.tickets?.[channelId] : null;
+  if (!ticketRecord) {
+    await interaction.reply({
+      content: ticketMessages.notTicketChannel,
+      ephemeral: true,
+    });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  try {
+    await channel.delete(`Ticket deleted by ${interaction.user.tag}`);
+  } catch (err) {
+    console.error('[tickets] Failed to delete ticket channel:', err?.message || err);
+    await interaction.editReply({
+      content: ticketMessages.ticketDeleteFailed,
+    });
+    return;
+  }
+
+  if (db.tickets && db.tickets[channelId]) {
+    delete db.tickets[channelId];
+    await enqueueBotDbSave(extractMetaPayload(db));
+  }
+
+  await logAction('ticket_delete', {
+    serverName: primaryServer.name,
+    discordId: ticketRecord.discordId || null,
+    steam64: ticketRecord.steam64 || null,
+    roleName: null,
+    expiresAt: null,
+    note: `channel=${channelId} by=${interaction.user.id}`,
+  });
+
+  try {
+    await interaction.editReply({
+      content: ticketMessages.ticketDeleted,
+    });
+  } catch (err) {
+    // Channel is removed; ignore failed ephemeral update.
+  }
+}
+
+async function handleTicketOwnerFirstMessage(message) {
+  if (!db || !message.inGuild() || !message.channelId || message.author?.bot) {
+    return;
+  }
+
+  const ticketRecord = db.tickets?.[message.channelId];
+  if (!ticketRecord || ticketRecord.closedAt) {
+    return;
+  }
+  if (String(ticketRecord.discordId) !== String(message.author.id)) {
+    return;
+  }
+
+  const now = unixNow();
+  let changed = false;
+  if (!ticketRecord.firstUserMessageAt) {
+    ticketRecord.firstUserMessageAt = now;
+    changed = true;
+  }
+
+  const ticketConfig = getTicketConfig();
+  if (ticketConfig.supportRoleId && !ticketRecord.supportNotifiedAt) {
+    try {
+      await message.channel.send({
+        content: `<@&${ticketConfig.supportRoleId}>`,
+        allowedMentions: {
+          roles: [ticketConfig.supportRoleId],
+        },
+      });
+      ticketRecord.supportNotifiedAt = now;
+      changed = true;
+    } catch (err) {
+      console.warn('[tickets] Failed to notify support role:', err?.message || err);
+    }
+  }
+
+  if (changed) {
+    await enqueueBotDbSave(extractMetaPayload(db));
+  }
+}
+
+async function runTicketInactivityCheck() {
+  if (!db) {
+    return;
+  }
+
+  const now = unixNow();
+  const staleChannelIds = [];
+  for (const [channelId, ticketRecord] of Object.entries(db.tickets || {})) {
+    if (!ticketRecord || ticketRecord.closedAt) {
+      continue;
+    }
+    if (ticketRecord.firstUserMessageAt) {
+      continue;
+    }
+    const openedAt = Number(ticketRecord.openedAt) || 0;
+    if (!openedAt) {
+      continue;
+    }
+    if (now - openedAt >= TICKET_IDLE_CLOSE_SECONDS) {
+      staleChannelIds.push(channelId);
+    }
+  }
+
+  for (const channelId of staleChannelIds) {
+    const ticketRecord = db.tickets?.[channelId];
+    if (!ticketRecord || ticketRecord.closedAt || ticketRecord.firstUserMessageAt) {
+      continue;
+    }
+
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+    if (!channel || !channel.isTextBased()) {
+      ticketRecord.closedAt = now;
+      ticketRecord.closedBy = String(client.user?.id || 'system');
+      ticketRecord.closeReason = 'inactive_timeout_missing_channel';
+      await enqueueBotDbSave(extractMetaPayload(db));
+      await logAction('ticket_close', {
+        serverName: primaryServer.name,
+        discordId: ticketRecord.discordId || null,
+        steam64: ticketRecord.steam64 || null,
+        roleName: null,
+        expiresAt: null,
+        note: `channel=${channelId} by=system reason=inactive_timeout_missing_channel`,
+      });
+      continue;
+    }
+
+    await closeTicketChannel(channel, ticketRecord, {
+      reason: 'inactive_timeout',
+      closedBy: String(client.user?.id || 'system'),
+    });
+  }
+}
+
 async function handleEveryoneProtection(message) {
   if (!message.inGuild() || !message.content || !message.member || message.author?.bot) {
     return;
@@ -2891,7 +3878,7 @@ async function handleEveryoneProtection(message) {
 
 async function assignMemberRole(member) {
   if (!member || !primaryGuild) {
-    return;
+    return false;
   }
   try {
     const candidateNames = new Set(
@@ -2901,11 +3888,13 @@ async function assignMemberRole(member) {
       (entry) => candidateNames.has(String(entry.name || '').trim().toLowerCase())
     );
     if (!role || member.roles.cache.has(role.id)) {
-      return;
+      return false;
     }
     await member.roles.add(role, 'SteamID linked');
+    return true;
   } catch (err) {
     console.error('[member-role] Failed to assign:', err?.message || err);
+    return false;
   }
 }
 
@@ -2986,6 +3975,7 @@ async function handleMemberLeave(member) {
       expiresAt: 0,
       note: 'member_left_discord',
     });
+    await notifyVipRemoved(discordId, 'left_guild');
   }
   if (hadMedia) {
     await logAction('media_remove', {
@@ -2997,6 +3987,92 @@ async function handleMemberLeave(member) {
       note: 'member_left_discord',
     });
   }
+}
+
+async function runStartupReconcile() {
+  if (!db || !primaryGuild) {
+    return;
+  }
+
+  const linkedEntries = Object.entries(db.links || {});
+  if (linkedEntries.length === 0) {
+    return;
+  }
+
+  let changed = false;
+  let assignedMemberRoleCount = 0;
+  let removedVipCount = 0;
+  let removedMediaCount = 0;
+
+  for (const [discordId, steam64] of linkedEntries) {
+    const member = await fetchGuildMember(discordId);
+    if (member) {
+      const assigned = await assignMemberRole(member);
+      if (assigned) {
+        assignedMemberRoleCount += 1;
+      }
+      continue;
+    }
+
+    const steamKey = String(steam64);
+    const hadVip = db.whiteList.vip.includes(steamKey);
+    const hadMedia = Array.isArray(db.whiteList?.media) && db.whiteList.media.includes(steamKey);
+    if (!hadVip && !hadMedia) {
+      continue;
+    }
+
+    if (hadVip) {
+      removeVip(steamKey);
+      delete db.vipTimed[steamKey];
+      addHistory('expire_remove', {
+        discordId,
+        steam64: steamKey,
+        roleName: null,
+        expiresAt: null,
+        note: 'startup_reconcile_member_missing',
+      });
+      await logAction('expire_remove', {
+        serverName: primaryServer.name,
+        discordId,
+        steam64: steamKey,
+        roleName: null,
+        expiresAt: 0,
+        note: 'startup_reconcile_member_missing',
+      });
+      await notifyVipRemoved(discordId, 'startup_check');
+      removedVipCount += 1;
+      changed = true;
+    }
+
+    if (hadMedia) {
+      removeMedia(steamKey);
+      addHistory('media_remove', {
+        discordId,
+        steam64: steamKey,
+        roleName: MEDIA_ROLE_NAME,
+        expiresAt: 0,
+        note: 'startup_reconcile_member_missing',
+      });
+      await logAction('media_remove', {
+        serverName: primaryServer.name,
+        discordId,
+        steam64: steamKey,
+        roleName: MEDIA_ROLE_NAME,
+        expiresAt: 0,
+        note: 'startup_reconcile_member_missing',
+      });
+      removedMediaCount += 1;
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    await persistAndSync();
+  }
+
+  console.log(
+    `[startup] reconcile: memberRoleAssigned=${assignedMemberRoleCount} vipRemoved=${removedVipCount} mediaRemoved=${removedMediaCount}`
+  );
 }
 
 async function initializeLeaderboardModule() {
@@ -3095,6 +4171,7 @@ async function initializeLeaderboardModule() {
       const refresh = async () => {
         try {
           await context.generator.updateLeaderboard(true);
+          console.log(`[leaderboard] background refresh OK for server=${context.key}`);
         } catch (err) {
           console.warn(
             `[leaderboard] background refresh failed for server=${context.key}:`,
@@ -3102,6 +4179,7 @@ async function initializeLeaderboardModule() {
           );
         }
       };
+      void refresh();
       setInterval(() => {
         void refresh();
       }, refreshInterval);
@@ -3116,14 +4194,14 @@ async function initializeLeaderboardModule() {
     if (!channel || !channel.isTextBased()) {
       console.warn('[leaderboard] Auto-post channel not found or not text-based.');
     } else {
-      const fallbackContext = leaderboardGenerators.values().next().value || null;
-      const selectedContext =
-        leaderboardGenerators.get(LEADERBOARD_CONFIG.defaultServerKey) || fallbackContext;
-      if (selectedContext && typeof selectedContext.generator.autoPostLeaderboard === 'function') {
-        selectedContext.generator.autoPostLeaderboard(channel, LEADERBOARD_CONFIG.autoPostIntervalMs, {
-          serverName: selectedContext.name,
+      for (const context of leaderboardGenerators.values()) {
+        if (typeof context.generator.autoPostLeaderboard !== 'function') {
+          continue;
+        }
+        context.generator.autoPostLeaderboard(channel, LEADERBOARD_CONFIG.autoPostIntervalMs, {
+          serverName: context.name,
         });
-        console.log(`[leaderboard] Auto-post started for server=${selectedContext.key}.`);
+        console.log(`[leaderboard] Auto-post started for server=${context.key}.`);
       }
     }
   }
@@ -3269,11 +4347,15 @@ async function registerCommands() {
     WHOIS_COMMAND,
     VIPLIST_COMMAND,
     STATS_COMMAND,
+    PLAYERSTATS_COMMAND,
     SETVIP_COMMAND,
     REMOVEVIP_COMMAND,
     GIVEVIP_COMMAND,
     PROFILE_COMMAND,
     SERVERINFO_COMMAND,
+    TICKETPANEL_COMMAND,
+    CLOSE_TICKET_COMMAND,
+    DELETE_TICKET_COMMAND,
   ];
   for (const command of buildLeaderboardSlashCommands()) {
     if (commandBuilders.some((entry) => entry.name === command.name)) {
@@ -3301,23 +4383,25 @@ client.once('clientReady', async () => {
   }
 
   try {
-    startHistoryFeed(client, config);
-  } catch (err) {
-    console.error('History feed init failed:', err?.message || err);
-  }
-
-  try {
     await initializeLeaderboardModule();
   } catch (err) {
     console.error('Leaderboard init failed:', err?.message || err);
   }
 
+  await enqueueOperation(runStartupReconcile);
   await enqueueOperation(runExpirationCheck);
   setInterval(() => enqueueOperation(runExpirationCheck), CHECK_INTERVAL_MS);
+  await enqueueOperation(runTicketInactivityCheck);
+  setInterval(() => enqueueOperation(runTicketInactivityCheck), TICKET_IDLE_CHECK_INTERVAL_MS);
   startDailyBackup();
 });
 
 client.on('messageCreate', async (message) => {
+  try {
+    await handleTicketOwnerFirstMessage(message);
+  } catch (err) {
+    console.error('[tickets] first-message hook failed:', err?.message || err);
+  }
   try {
     await handleEveryoneProtection(message);
   } catch (err) {
@@ -3379,6 +4463,51 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
 client.on('interactionCreate', async (interaction) => {
   let messages = getMessagesForLanguage(DEFAULT_LANGUAGE);
   try {
+    if (interaction.isButton()) {
+      if (!db) {
+        await interaction.reply({
+          content: getMessagesForLanguage(DEFAULT_LANGUAGE).statusLoading,
+          ephemeral: true,
+        });
+        return;
+      }
+      if (interaction.customId === 'ticket_create_ru') {
+        await showTicketCreateModal(interaction, 'ru');
+        return;
+      }
+      if (interaction.customId === 'ticket_create_en') {
+        await showTicketCreateModal(interaction, 'en');
+        return;
+      }
+      if (interaction.customId === 'ticket_create') {
+        await showTicketCreateModal(interaction);
+        return;
+      }
+      if (interaction.customId === 'ticket_close') {
+        await handleTicketClose(interaction);
+        return;
+      }
+      return;
+    }
+
+    if (interaction.isModalSubmit()) {
+      if (!db) {
+        await interaction.reply({
+          content: getMessagesForLanguage(DEFAULT_LANGUAGE).statusLoading,
+          ephemeral: true,
+        });
+        return;
+      }
+      if (
+        interaction.customId === 'ticket_create_modal_ru' ||
+        interaction.customId === 'ticket_create_modal_en'
+      ) {
+        await handleTicketCreateModalSubmit(interaction);
+        return;
+      }
+      return;
+    }
+
     if (!interaction.isChatInputCommand()) {
       return;
     }
@@ -3397,7 +4526,7 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
-    if (interaction.commandName === 'profile') {
+    if (interaction.commandName === 'ticketpanel') {
       if (!interaction.inGuild()) {
         await interaction.reply({
           content: messages.onlyGuild,
@@ -3405,6 +4534,35 @@ client.on('interactionCreate', async (interaction) => {
         });
         return;
       }
+      await handleTicketPanelCommand(interaction, interactionLanguage);
+      return;
+    }
+
+    if (interaction.commandName === 'close') {
+      if (!interaction.inGuild()) {
+        await interaction.reply({
+          content: messages.onlyGuild,
+          ephemeral: true,
+        });
+        return;
+      }
+      await handleTicketClose(interaction);
+      return;
+    }
+
+    if (interaction.commandName === 'delete') {
+      if (!interaction.inGuild()) {
+        await interaction.reply({
+          content: messages.onlyGuild,
+          ephemeral: true,
+        });
+        return;
+      }
+      await handleTicketDeleteCommand(interaction, interactionLanguage);
+      return;
+    }
+
+    if (interaction.commandName === 'profile') {
       await handleProfileCommand(interaction, interactionLanguage);
       return;
     }
@@ -3466,14 +4624,6 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     if (interaction.commandName === 'steamid') {
-      if (!interaction.inGuild()) {
-        await interaction.reply({
-          content: messages.onlyGuild,
-          ephemeral: true,
-        });
-        return;
-      }
-
       const input = normalizeSteamId64(interaction.options.getString('steamid', true));
       if (!isValidSteamId64(input)) {
         await interaction.reply({
@@ -3542,7 +4692,8 @@ client.on('interactionCreate', async (interaction) => {
         });
 
         try {
-          const guildMember = await interaction.guild.members.fetch(discordId).catch(() => null);
+          const guild = interaction.guild ?? await client.guilds.fetch(config.guildId).catch(() => null);
+          const guildMember = guild ? await guild.members.fetch(discordId).catch(() => null) : null;
           if (guildMember) {
             await assignMemberRole(guildMember);
           }
@@ -3807,6 +4958,11 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     if (interaction.commandName === 'stats') {
+      await statsCard.handle(interaction);
+      return;
+    }
+
+    if (interaction.commandName === 'vipstats') {
       if (!interaction.inGuild()) {
         await interaction.reply({
           content: messages.onlyGuild,
@@ -4025,6 +5181,9 @@ client.on('interactionCreate', async (interaction) => {
         const steam64 = getLinkedSteamId(targetUser.id);
         if (!steam64) {
           await removeDiscordVipRoles(targetUser.id, `VIP removed by ${interaction.user.tag}`);
+          await notifyVipRemoved(targetUser.id, 'admin', {
+            admin: `<@${interaction.user.id}>`,
+          });
           await interaction.editReply({
             content: messages.removeVipNoLink,
           });
@@ -4052,6 +5211,9 @@ client.on('interactionCreate', async (interaction) => {
         await persistAndSync();
 
         await removeDiscordVipRoles(targetUser.id, `VIP removed by ${interaction.user.tag}`);
+        await notifyVipRemoved(targetUser.id, 'admin', {
+          admin: `<@${interaction.user.id}>`,
+        });
 
         await interaction.editReply({
           content: messages.removeVipDone,

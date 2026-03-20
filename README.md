@@ -1,6 +1,6 @@
 # SWAGA-Beta
 
-Discord-бот для DayZ: управление VIP, синхронизация whitelist (local/FTP), API для GUI, публикация дуэлей, лидерборды и аудит.
+Discord-бот для DayZ: управление VIP, синхронизация whitelist (local/FTP), API для GUI, лидерборды и аудит.
 
 ## Возможности
 
@@ -8,7 +8,6 @@ Discord-бот для DayZ: управление VIP, синхронизация
 - VIP-логика с тарифами, сроками, авто-истечением и уведомлениями в DM.
 - Поддержка ролей `VIP`, `newera`, `media`.
 - Синхронизация whitelist между несколькими серверами (`local` и `ftp`).
-- History feed из `history.json` в Discord-каналы.
 - Лидерборд CF Cloud (`/top`, `/updatetop`, автообновление, автопост).
 - REST API для GUI.
 - Аудит в файл + аудит в Discord-канал.
@@ -18,7 +17,7 @@ Discord-бот для DayZ: управление VIP, синхронизация
 
 ## Структура репозитория
 
-- `bot/` — бот, API, модули history feed/leaderboard.
+- `bot/` — бот, API, модули leaderboard.
 - `gui/` — GUI-клиент (Electron + React).
 
 ## Требования
@@ -52,6 +51,15 @@ npm start
 - `/serverinfo`
 - `/top` (если включен leaderboard)
 - `/updatetop` (если включен leaderboard)
+- `/ticketpanel`
+- `/close`
+- `/delete` (admin only)
+
+## Tickets
+
+- Panel supports RU/EN ticket creation buttons.
+- When a ticket is closed, the ticket owner loses access to the channel.
+- `/delete` permanently removes ticket channel (admin only).
 
 ## REST API (кратко)
 
@@ -100,17 +108,6 @@ npm start
 - `api.maxLogLines`
 - `api.maxPageSize`
 
-### History feed
-
-- `history.pollMs`
-- `history.serverName`
-- `history.feeds[]`:
-  - `name`
-  - `server`
-  - `path`
-  - `channelId`
-  - `serverName` (опционально)
-
 ### Leaderboard
 
 - `leaderboard.enabled`
@@ -127,7 +124,6 @@ npm start
 - `bot/config.json` — конфиг (секреты не коммитить).
 - `bot/bot-db.json` — мета-данные бота (links/locales/vipTimed/history).
 - `bot/vip.log` — лог действий.
-- `bot/.history_state*.json` — state history feed.
 
 ## Сборка .exe
 
@@ -135,4 +131,3 @@ npm start
 cd bot
 node node_modules/pkg/lib-es5/bin.js index.js --targets node16-win-x64 --output dist/vip-bot.exe
 ```
-
