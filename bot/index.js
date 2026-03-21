@@ -54,7 +54,14 @@ const VIP_ROLES = new Map([
   ['VIP', null],
 ]);
 const VIP_ROLE_NAMES = new Set(VIP_ROLES.keys());
-const NEWERA_ROLE_NAME = 'newera';
+const GIVEAWAY_VIP_ROLE_NAME = 'VIP (Giveaway)';
+const GIVEAWAY_PRIZE_OPTIONS = [
+  { label: 'VIP 24 Hours', value: 'vip_24h', durationSeconds: 24 * 3600 },
+  { label: 'VIP 7 Days', value: 'vip_7d', durationSeconds: 7 * 24 * 3600 },
+  { label: 'VIP 14 Days', value: 'vip_14d', durationSeconds: 14 * 24 * 3600 },
+  { label: 'VIP Monthly', value: 'vip_monthly', durationSeconds: 30 * 24 * 3600 },
+  { label: 'VIP', value: 'vip_forever', durationSeconds: null },
+];
 const MEDIA_ROLE_NAME = 'media';
 const MEMBER_ROLE_NAMES = [':white_check_mark:', '✅'];
 const EVERYONE_TIMEOUT_SECONDS = 3600;
@@ -230,6 +237,7 @@ const TARIFF_LABELS_RU = {
   'VIP Test': 'VIP (1 час)',
   'VIP 14 Days': 'VIP (14 дней)',
   'VIP Monthly': 'VIP (30 дней)',
+  'VIP (Giveaway)': 'VIP (розыгрыш)',
   VIP: 'VIP (навсегда)',
 };
 
@@ -237,6 +245,7 @@ const TARIFF_LABELS_EN = {
   'VIP Test': 'VIP (1 hour)',
   'VIP 14 Days': 'VIP (14 days)',
   'VIP Monthly': 'VIP (30 days)',
+  'VIP (Giveaway)': 'VIP (giveaway)',
   VIP: 'VIP (forever)',
 };
 
@@ -247,8 +256,6 @@ const AUDIT_LABELS_RU = {
   expire_warn: 'Предупреждение об истечении',
   link_set: 'Привязка сохранена',
   link_remove: 'Привязка удалена',
-  newera_add: 'NewEra выдан',
-  newera_remove: 'NewEra снят',
   media_add: 'Media выдан',
   media_remove: 'Media снят',
   api_givevip: 'API: выдача VIP',
@@ -271,8 +278,6 @@ const AUDIT_LABELS_EN = {
   expire_warn: 'Expiration warning',
   link_set: 'Link set',
   link_remove: 'Link removed',
-  newera_add: 'NewEra granted',
-  newera_remove: 'NewEra removed',
   media_add: 'Media granted',
   media_remove: 'Media removed',
   api_givevip: 'API: give VIP',
@@ -483,7 +488,6 @@ const GIVEVIP_COMMAND = new SlashCommandBuilder()
     for (const roleName of VIP_ROLES.keys()) {
       option.addChoices({ name: roleName, value: roleName });
     }
-    option.addChoices({ name: NEWERA_ROLE_NAME, value: NEWERA_ROLE_NAME });
     return option;
   });
 
@@ -498,6 +502,67 @@ const SERVERINFO_COMMAND = new SlashCommandBuilder()
   .setDMPermission(false)
   .setDefaultMemberPermissions(PermissionFlagsBits.Administrator);
 
+
+const GIVEAWAY_COMMAND = new SlashCommandBuilder()
+  .setName('giveaway')
+  .setDescription('Manage giveaways')
+  .setDMPermission(false)
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
+  .addSubcommand((sub) =>
+    sub
+      .setName('create')
+      .setDescription('Create a standard giveaway with a join button')
+      .addStringOption((o) => {
+        o.setName('prize').setDescription('VIP reward').setRequired(true);
+        for (const option of GIVEAWAY_PRIZE_OPTIONS) {
+          o.addChoices({ name: option.label, value: option.value });
+        }
+        return o;
+      })
+      .addIntegerOption((o) => o.setName('duration').setDescription('Duration in minutes').setRequired(true).setMinValue(1).setMaxValue(10080))
+      .addIntegerOption((o) => o.setName('winners').setDescription('Number of winners (default 1)').setMinValue(1).setMaxValue(10))
+  )
+  .addSubcommand((sub) =>
+    sub
+      .setName('server')
+      .setDescription('Pick a random winner from players currently online')
+      .addStringOption((o) => {
+        o.setName('prize').setDescription('VIP reward').setRequired(true);
+        for (const option of GIVEAWAY_PRIZE_OPTIONS) {
+          o.addChoices({ name: option.label, value: option.value });
+        }
+        return o;
+      })
+      .addIntegerOption((o) =>
+        o
+          .setName('duration')
+          .setDescription('Duration in minutes')
+          .setRequired(true)
+          .setMinValue(1)
+          .setMaxValue(10080)
+      )
+      .addStringOption((o) =>
+        o.setName('server').setDescription('Server to pick from').setRequired(false)
+          .addChoices(
+            { name: 'SWAGA 20MM', value: 's1' },
+            { name: 'SWAGA .338', value: 's2' },
+            { name: 'SWAGA VANILLA', value: 's3' },
+            { name: 'All servers', value: 'all' }
+          )
+      )
+  )
+  .addSubcommand((sub) =>
+    sub
+      .setName('end')
+      .setDescription('End a giveaway early and pick a winner')
+      .addStringOption((o) => o.setName('message_id').setDescription('Giveaway message ID').setRequired(true))
+  )
+  .addSubcommand((sub) =>
+    sub
+      .setName('reroll')
+      .setDescription('Reroll winner for ended giveaway')
+      .addStringOption((o) => o.setName('message_id').setDescription('Giveaway message ID').setRequired(true))
+  );
 const TICKETPANEL_COMMAND = new SlashCommandBuilder()
   .setName('ticketpanel')
   .setDescription('Post ticket panel in current channel')
@@ -540,8 +605,6 @@ const AUDIT_ACTIONS = new Set([
   'expire_warn',
   'link_set',
   'link_remove',
-  'newera_add',
-  'newera_remove',
   'media_add',
   'media_remove',
   'api_givevip',
@@ -564,6 +627,7 @@ let opQueue = Promise.resolve();
 let primaryGuild = null;
 let auditChannel = null;
 let leaderboardGenerators = new Map();
+const giveaways = new Map();
 const invalidLinks = new Set();
 const roleChangeSkips = new Set();
 
@@ -1221,26 +1285,17 @@ function normalizeSettingsDb(data) {
   } else {
     normalized.whiteList.vip = [...new Set(normalized.whiteList.vip.map(String))];
   }
-  if (!Array.isArray(normalized.whiteList.newera)) {
-    normalized.whiteList.newera = [];
-  } else {
-    normalized.whiteList.newera = [...new Set(normalized.whiteList.newera.map(String))];
-  }
   if (!Array.isArray(normalized.whiteList.media)) {
     normalized.whiteList.media = [];
   } else {
     normalized.whiteList.media = [...new Set(normalized.whiteList.media.map(String))];
-  }
-  if (Array.isArray(normalized.newera) && normalized.newera.length > 0) {
-    normalized.whiteList.newera = [
-      ...new Set([...normalized.whiteList.newera, ...normalized.newera.map(String)]),
-    ];
   }
   if (Array.isArray(normalized.media) && normalized.media.length > 0) {
     normalized.whiteList.media = [
       ...new Set([...normalized.whiteList.media, ...normalized.media.map(String)]),
     ];
   }
+  delete normalized.whiteList.newera;
   delete normalized.newera;
   delete normalized.media;
   return normalized;
@@ -1271,7 +1326,7 @@ function createBaseSettingsDb() {
     Enable: 1,
     ChatCommand: '!loadout',
     PresetSlots: 10,
-    whiteList: { vip: [], newera: [], media: [] },
+    whiteList: { vip: [], media: [] },
   };
 }
 
@@ -1604,9 +1659,6 @@ async function syncWhitelistToServers() {
     return;
   }
   const whitelist = [...new Set(db.whiteList.vip.map(String))];
-  const newera = Array.isArray(db.whiteList?.newera)
-    ? [...new Set(db.whiteList.newera.map(String))]
-    : [];
   const media = Array.isArray(db.whiteList?.media)
     ? [...new Set(db.whiteList.media.map(String))]
     : [];
@@ -1618,7 +1670,6 @@ async function syncWhitelistToServers() {
       const serverDb = await readServerJsonOrCreate(server);
       const settingsPayload = extractSettingsPayload(serverDb);
       settingsPayload.whiteList.vip = [...whitelist];
-      settingsPayload.whiteList.newera = [...newera];
       settingsPayload.whiteList.media = [...media];
       await enqueueServerSave(server, settingsPayload);
     } catch (err) {
@@ -2256,36 +2307,10 @@ function removeVip(steam64) {
   db.whiteList.vip = db.whiteList.vip.filter((entry) => entry !== key);
 }
 
-function ensureNewera(steam64) {
-  const key = String(steam64);
-  if (!db.whiteList || typeof db.whiteList !== 'object') {
-    db.whiteList = { vip: [], newera: [], media: [] };
-  }
-  if (!Array.isArray(db.whiteList.newera)) {
-    db.whiteList.newera = [];
-  }
-  if (!db.whiteList.newera.includes(key)) {
-    db.whiteList.newera.push(key);
-  }
-}
-
-function removeNewera(steam64) {
-  const key = String(steam64);
-  if (!db.whiteList || typeof db.whiteList !== 'object') {
-    db.whiteList = { vip: [], newera: [], media: [] };
-    return;
-  }
-  if (!Array.isArray(db.whiteList.newera)) {
-    db.whiteList.newera = [];
-    return;
-  }
-  db.whiteList.newera = db.whiteList.newera.filter((entry) => entry !== key);
-}
-
 function ensureMedia(steam64) {
   const key = String(steam64);
   if (!db.whiteList || typeof db.whiteList !== 'object') {
-    db.whiteList = { vip: [], newera: [], media: [] };
+    db.whiteList = { vip: [], media: [] };
   }
   if (!Array.isArray(db.whiteList.media)) {
     db.whiteList.media = [];
@@ -2298,7 +2323,7 @@ function ensureMedia(steam64) {
 function removeMedia(steam64) {
   const key = String(steam64);
   if (!db.whiteList || typeof db.whiteList !== 'object') {
-    db.whiteList = { vip: [], newera: [], media: [] };
+    db.whiteList = { vip: [], media: [] };
     return;
   }
   if (!Array.isArray(db.whiteList.media)) {
@@ -2561,82 +2586,6 @@ async function handleVipRoleRemoved(member, roleName) {
   });
 }
 
-async function handleNeweraRoleAdded(member) {
-  const discordId = member.id;
-  const language = resolveUserLanguage(discordId, member.guild?.preferredLocale);
-  const steam64 = getLinkedSteamId(discordId);
-  if (!steam64) {
-    await logAction('newera_missing_link', {
-      discordId,
-      steam64: null,
-      roleName: NEWERA_ROLE_NAME,
-      expiresAt: null,
-      note: 'role_add_no_link',
-    });
-    await sendDm(member, { embeds: [buildMissingLinkEmbed(NEWERA_ROLE_NAME, language)] });
-    return;
-  }
-
-  const steamKey = String(steam64);
-  ensureNewera(steamKey);
-
-  addHistory('newera_add', {
-    discordId,
-    steam64: steamKey,
-    roleName: NEWERA_ROLE_NAME,
-    expiresAt: 0,
-    note: 'auto',
-  });
-
-  await persistAndSync();
-
-  await sendDm(member, { embeds: [buildRoleActivatedEmbed(NEWERA_ROLE_NAME, language)] });
-
-  await logAction('newera_add', {
-    discordId,
-    steam64: steamKey,
-    roleName: NEWERA_ROLE_NAME,
-    expiresAt: 0,
-    note: 'auto',
-  });
-}
-
-async function handleNeweraRoleRemoved(member) {
-  const discordId = member.id;
-  const steam64 = getLinkedSteamId(discordId);
-  if (!steam64) {
-    await logAction('newera_missing_link', {
-      discordId,
-      steam64: null,
-      roleName: NEWERA_ROLE_NAME,
-      expiresAt: null,
-      note: 'role_remove_no_link',
-    });
-    return;
-  }
-
-  const steamKey = String(steam64);
-  removeNewera(steamKey);
-
-  addHistory('newera_remove', {
-    discordId,
-    steam64: steamKey,
-    roleName: NEWERA_ROLE_NAME,
-    expiresAt: 0,
-    note: 'manual',
-  });
-
-  await persistAndSync();
-
-  await logAction('newera_remove', {
-    discordId,
-    steam64: steamKey,
-    roleName: NEWERA_ROLE_NAME,
-    expiresAt: 0,
-    note: 'manual',
-  });
-}
-
 async function handleMediaRoleAdded(member) {
   const discordId = member.id;
   const language = resolveUserLanguage(discordId, member.guild?.preferredLocale);
@@ -2731,7 +2680,9 @@ async function removeDiscordVipRoles(discordId, note) {
     return;
   }
 
-  const rolesToRemove = member.roles.cache.filter((role) => VIP_ROLE_NAMES.has(role.name));
+  const rolesToRemove = member.roles.cache.filter(
+    (role) => VIP_ROLE_NAMES.has(role.name) || role.name === GIVEAWAY_VIP_ROLE_NAME
+  );
   if (!rolesToRemove.size) {
     return;
   }
@@ -3118,7 +3069,7 @@ function formatTicketSteamFieldValue(steam64) {
     return normalized;
   }
   const profileUrl = buildCfToolsProfileUrl(normalized);
-  return `<${profileUrl}>\n${normalized}`;
+  return `[${normalized}](${profileUrl})`;
 }
 
 function buildTicketOpenEmbed(member, steam64, language) {
@@ -4337,6 +4288,555 @@ async function handleLeaderboardInteraction(interaction) {
   return true;
 }
 
+
+const CFTOOLS_SERVERS = [
+  { key: 's1', name: 'SWAGA 20MM', id: '00ebc10b-efbe-437a-bf0f-7fde12ee53ff' },
+  { key: 's2', name: 'SWAGA .338', id: '91dccd12-97de-4340-b23b-dde8a2f64e44' },
+  { key: 's3', name: 'SWAGA VANILLA', id: 'af7eebde-c26e-4ece-a0b6-31daebab5080' },
+];
+
+async function getCftoolsToken() {
+  const appId = config.leaderboard?.cfCloudApplicationId || config.cfCloudApplicationId || '';
+  const appSecret = config.leaderboard?.cfCloudApplicationSecret || config.cfCloudApplicationSecret || '';
+  if (!appId || !appSecret) return null;
+  try {
+    const resp = await fetch('https://data.cftools.cloud/v1/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ application_id: appId, secret: appSecret }),
+    });
+    const data = await resp.json();
+    return data.token || null;
+  } catch { return null; }
+}
+
+async function getOnlinePlayers(serverIds) {
+  const token = await getCftoolsToken();
+  if (!token) return null;
+  const players = [];
+  for (const sid of serverIds) {
+    try {
+      const resp = await fetch(`https://data.cftools.cloud/v1/server/${sid}/GSM/list`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await resp.json();
+      console.log('[cftools] sessions sample:', JSON.stringify(data.sessions?.[0], null, 2));
+      if (data.sessions && Array.isArray(data.sessions)) {
+        for (const s of data.sessions) {
+          const name = s.gamedata?.player_name || s.persona?.profile?.name || s['cftools_id'] || 'Unknown';
+          const steam64 = s.gamedata?.steam64 || null;
+          players.push({ name, steam64, serverId: sid });
+        }
+      }
+    } catch { /* skip failed server */ }
+  }
+  return players;
+}
+
+function getGiveawayPrizeOption(prizeValue) {
+  return GIVEAWAY_PRIZE_OPTIONS.find((entry) => entry.value === String(prizeValue || '')) || null;
+}
+
+async function grantGiveawayRole(discordId, note) {
+  const member = await fetchGuildMember(discordId);
+  if (!member) {
+    return { assigned: false, reason: 'member_not_found' };
+  }
+  const role = member.guild.roles.cache.find((entry) => entry.name === GIVEAWAY_VIP_ROLE_NAME);
+  if (!role) {
+    return { assigned: false, reason: 'role_not_found' };
+  }
+  if (!role.editable) {
+    return { assigned: false, reason: 'role_not_editable' };
+  }
+  if (member.roles.cache.has(role.id)) {
+    return { assigned: false, reason: 'already_has_role' };
+  }
+  await member.roles.add(role, note);
+  return { assigned: true, reason: 'assigned' };
+}
+
+async function grantGiveawayRewardToWinners(giveaway, reason) {
+  if (!giveaway || giveaway.ended !== true || !Array.isArray(giveaway.winners)) {
+    return { granted: 0, skipped: 0 };
+  }
+  const reward = getGiveawayPrizeOption(giveaway.prizeValue);
+  if (!reward) {
+    return { granted: 0, skipped: giveaway.winners.length };
+  }
+  if (!(giveaway.rewardedWinnerIds instanceof Set)) {
+    giveaway.rewardedWinnerIds = new Set(
+      Array.isArray(giveaway.rewardedWinnerIds) ? giveaway.rewardedWinnerIds : []
+    );
+  }
+
+  const now = unixNow();
+  const grantedEntries = [];
+  let dbChanged = false;
+  let skipped = 0;
+
+  for (const winnerId of giveaway.winners) {
+    const discordId = String(winnerId || '');
+    if (!discordId || giveaway.rewardedWinnerIds.has(discordId)) {
+      skipped += 1;
+      continue;
+    }
+
+    const steam64 = getLinkedSteamId(discordId);
+    if (!steam64) {
+      skipped += 1;
+      await logAction('giveaway_reward_skip', {
+        serverName: primaryServer.name,
+        discordId,
+        steam64: null,
+        roleName: GIVEAWAY_VIP_ROLE_NAME,
+        expiresAt: null,
+        note: 'steam64_not_linked',
+      });
+      continue;
+    }
+
+    const steamKey = String(steam64);
+    if (!db.whiteList.vip.includes(steamKey)) {
+      ensureVip(steamKey);
+      dbChanged = true;
+    }
+
+    let expiresAt = 0;
+    if (reward.durationSeconds === null) {
+      if (db.vipTimed[steamKey]) {
+        delete db.vipTimed[steamKey];
+        dbChanged = true;
+      }
+    } else {
+      expiresAt = now + reward.durationSeconds;
+      db.vipTimed[steamKey] = {
+        issuedAt: now,
+        expiresAt,
+        roleName: GIVEAWAY_VIP_ROLE_NAME,
+        source: 'giveaway',
+        reason,
+      };
+      dbChanged = true;
+    }
+
+    addHistory('giveaway_reward', {
+      discordId,
+      steam64: steamKey,
+      roleName: GIVEAWAY_VIP_ROLE_NAME,
+      expiresAt,
+      note: reward.label,
+    });
+
+    giveaway.rewardedWinnerIds.add(discordId);
+    grantedEntries.push({ discordId, steam64: steamKey, expiresAt });
+  }
+
+  if (dbChanged) {
+    await persistAndSync();
+  }
+
+  for (const entry of grantedEntries) {
+    const roleResult = await grantGiveawayRole(
+      entry.discordId,
+      `Giveaway reward: ${reward.label}`
+    ).catch((err) => ({ assigned: false, reason: err.message || 'role_assign_failed' }));
+    const language = resolveUserLanguage(entry.discordId, primaryGuild?.preferredLocale);
+    await sendDmToUserId(entry.discordId, {
+      embeds: [buildVipEmbed(GIVEAWAY_VIP_ROLE_NAME, entry.expiresAt > 0 ? entry.expiresAt : null, language)],
+    });
+    await logAction('giveaway_reward', {
+      serverName: primaryServer.name,
+      discordId: entry.discordId,
+      steam64: entry.steam64,
+      roleName: GIVEAWAY_VIP_ROLE_NAME,
+      expiresAt: entry.expiresAt,
+      note: `${reward.label}; role=${roleResult.reason}`,
+    });
+  }
+
+  return {
+    granted: grantedEntries.length,
+    skipped,
+  };
+}
+
+function buildGiveawayEmbed(giveaway, ended = false) {
+  const endsAt = Math.floor(giveaway.endsAt / 1000);
+  const desc = ended
+    ? `🎉 **Розыгрыш завершён!**\n\n🏆 Победитель${giveaway.winners.length > 1 ? 'и' : ''}: ${giveaway.winners.length ? giveaway.winners.map((w) => `<@${w}>`).join(', ') : 'нет участников'}`
+    : `👥 Участников: **${giveaway.participants.size}**\n⏰ Заканчивается: <t:${endsAt}:R>`;
+  return new EmbedBuilder()
+    .setTitle(`🎁 ${giveaway.prize}`)
+    .setDescription(desc)
+    .setColor(ended ? 0x5865f2 : 0x7c3aed)
+    .setFooter({ text: ended ? `Победителей: ${giveaway.winnersCount}` : `Победителей: ${giveaway.winnersCount} · ID: ${giveaway.messageId || '...'}` });
+}
+
+function buildJoinButton(giveawayId) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`giveaway_join:${giveawayId}`)
+      .setLabel('Участвовать 🎉')
+      .setStyle(ButtonStyle.Primary)
+  );
+}
+
+function buildSteamModal(giveawayId) {
+  const modal = new ModalBuilder()
+    .setCustomId(`giveaway_steam_modal:${giveawayId}`)
+    .setTitle('Привязка Steam для участия');
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId('steamid_input')
+        .setLabel('Твой SteamID64 (17 цифр)')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('76561198000000000')
+        .setRequired(true)
+    )
+  );
+  return modal;
+}
+
+function pickWinners(participants, count) {
+  const arr = Array.from(participants);
+  const winners = [];
+  while (winners.length < count && arr.length > 0) {
+    const idx = Math.floor(Math.random() * arr.length);
+    winners.push(arr.splice(idx, 1)[0]);
+  }
+  return winners;
+}
+
+function escapeMarkdownLinkText(value) {
+  return String(value || '')
+    .replace(/\\/g, '\\\\')
+    .replace(/\[/g, '\\[')
+    .replace(/\]/g, '\\]');
+}
+
+function formatOnlineGiveawayWinnerLine(winner) {
+  if (!winner || typeof winner !== 'object') {
+    return '🏆 **Победитель:** Unknown';
+  }
+  const winnerName = winner.name ? String(winner.name) : 'Unknown';
+  const steam64 = winner.steam64 ? normalizeSteamId64(winner.steam64) : null;
+  const hasValidSteam = steam64 && isValidSteamId64(steam64);
+  const winnerLabel = hasValidSteam
+    ? `[${escapeMarkdownLinkText(winnerName)}](${buildCfToolsProfileUrl(steam64)})`
+    : `**${winnerName}**`;
+  const linkedDiscordId = hasValidSteam ? findDiscordIdBySteam(steam64) : null;
+  const discordLine = linkedDiscordId ? `\n🔗 Discord: <@${linkedDiscordId}>` : '';
+  return `🏆 **Победитель:** ${winnerLabel}${discordLine}`;
+}
+
+async function grantServerGiveawayWinnerReward(winner, reward, reason) {
+  if (!winner || !reward) {
+    return { granted: false, reason: 'invalid_payload' };
+  }
+  const steam64 = winner.steam64 ? normalizeSteamId64(winner.steam64) : null;
+  if (!steam64 || !isValidSteamId64(steam64)) {
+    return { granted: false, reason: 'steam64_missing' };
+  }
+
+  const steamKey = String(steam64);
+  const discordId = findDiscordIdBySteam(steamKey);
+  const now = unixNow();
+  let expiresAt = 0;
+  let dbChanged = false;
+
+  if (!db.whiteList.vip.includes(steamKey)) {
+    ensureVip(steamKey);
+    dbChanged = true;
+  }
+
+  if (reward.durationSeconds === null) {
+    if (db.vipTimed[steamKey]) {
+      delete db.vipTimed[steamKey];
+      dbChanged = true;
+    }
+  } else {
+    expiresAt = now + reward.durationSeconds;
+    db.vipTimed[steamKey] = {
+      issuedAt: now,
+      expiresAt,
+      roleName: GIVEAWAY_VIP_ROLE_NAME,
+      source: 'giveaway_server',
+      reason,
+    };
+    dbChanged = true;
+  }
+
+  addHistory('giveaway_reward', {
+    discordId: discordId || null,
+    steam64: steamKey,
+    roleName: GIVEAWAY_VIP_ROLE_NAME,
+    expiresAt,
+    note: reward.label,
+  });
+
+  if (dbChanged) {
+    await persistAndSync();
+  }
+
+  let roleReason = 'no_discord_link';
+  if (discordId) {
+    const roleResult = await grantGiveawayRole(
+      discordId,
+      `Giveaway reward: ${reward.label}`
+    ).catch((err) => ({ assigned: false, reason: err.message || 'role_assign_failed' }));
+    roleReason = roleResult.reason || (roleResult.assigned ? 'assigned' : 'unknown');
+
+    const language = resolveUserLanguage(discordId, primaryGuild?.preferredLocale);
+    await sendDmToUserId(discordId, {
+      embeds: [
+        buildVipEmbed(
+          GIVEAWAY_VIP_ROLE_NAME,
+          expiresAt > 0 ? expiresAt : null,
+          language
+        ),
+      ],
+    });
+  }
+
+  await logAction('giveaway_reward', {
+    serverName: primaryServer.name,
+    discordId: discordId || null,
+    steam64: steamKey,
+    roleName: GIVEAWAY_VIP_ROLE_NAME,
+    expiresAt,
+    note: `${reward.label}; source=server; role=${roleReason}`,
+  });
+
+  return {
+    granted: true,
+    steam64: steamKey,
+    discordId: discordId || null,
+    expiresAt,
+    roleReason,
+  };
+}
+
+async function endGiveaway(giveawayId) {
+  const giveaway = giveaways.get(giveawayId);
+  if (!giveaway || giveaway.ended) return;
+  giveaway.ended = true;
+  giveaway.winners = pickWinners(giveaway.participants, giveaway.winnersCount);
+  try {
+    const channel = await client.channels.fetch(giveaway.channelId).catch(() => null);
+    if (!channel) return;
+    const msg = await channel.messages.fetch(giveaway.messageId).catch(() => null);
+    if (msg) {
+      await msg.edit({ embeds: [buildGiveawayEmbed(giveaway, true)], components: [] });
+    }
+    const mention = giveaway.winners.length
+      ? `🎉 Поздравляем ${giveaway.winners.map((w) => `<@${w}>`).join(', ')}! Вы выиграли **${giveaway.prize}**!`
+      : '😔 Никто не участвовал в розыгрыше.';
+    await channel.send({ content: mention });
+    await grantGiveawayRewardToWinners(giveaway, 'auto_end');
+  } catch (err) {
+    console.error('[giveaway] end error:', err);
+  }
+}
+
+async function handleGiveawayCommand(interaction) {
+  const sub = interaction.options.getSubcommand();
+
+  if (sub === 'create') {
+    const prizeValue = interaction.options.getString('prize', true);
+    const reward = getGiveawayPrizeOption(prizeValue);
+    if (!reward) {
+      await interaction.reply({ content: '❌ Неверный тип приза.', ephemeral: true });
+      return;
+    }
+    const prize = reward.label;
+    const duration = interaction.options.getInteger('duration', true);
+    const winnersCount = interaction.options.getInteger('winners') || 1;
+    const endsAt = Date.now() + duration * 60 * 1000;
+    const giveawayId = `${interaction.id}`;
+
+    const giveaway = {
+      id: giveawayId,
+      prize,
+      prizeValue: reward.value,
+      endsAt,
+      winnersCount,
+      participants: new Set(),
+      winners: [],
+      rewardedWinnerIds: new Set(),
+      ended: false,
+      channelId: interaction.channelId,
+      messageId: null,
+    };
+    giveaways.set(giveawayId, giveaway);
+
+    await interaction.deferReply({ ephemeral: true });
+    const embed = buildGiveawayEmbed(giveaway);
+    const row = buildJoinButton(giveawayId);
+    const msg = await interaction.channel.send({ embeds: [embed], components: [row] });
+    giveaway.messageId = msg.id;
+
+    setTimeout(() => endGiveaway(giveawayId), duration * 60 * 1000);
+    await interaction.editReply({ content: `✅ Розыгрыш создан! [Перейти](https://discord.com/channels/${interaction.guildId}/${interaction.channelId}/${msg.id})` });
+    return;
+  }
+
+  if (sub === 'server') {
+    await interaction.deferReply({ ephemeral: true });
+    const serverKey = interaction.options.getString('server') || 'all';
+    const prizeValue = interaction.options.getString('prize', true);
+    const reward = getGiveawayPrizeOption(prizeValue);
+    if (!reward) {
+      await interaction.editReply({ content: '❌ Неверный тип приза.' });
+      return;
+    }
+    const durationMinutes = interaction.options.getInteger('duration', true);
+    const serverIds = serverKey === 'all'
+      ? CFTOOLS_SERVERS.map((s) => s.id)
+      : [CFTOOLS_SERVERS.find((s) => s.key === serverKey)?.id].filter(Boolean);
+    if (!serverIds.length) {
+      await interaction.editReply({ content: '❌ Сервер не найден.' });
+      return;
+    }
+
+    const serverName = serverKey === 'all'
+      ? 'всех серверов'
+      : CFTOOLS_SERVERS.find((s) => s.key === serverKey)?.name || serverKey;
+    const endAtMs = Date.now() + durationMinutes * 60 * 1000;
+    const endAtUnix = Math.floor(endAtMs / 1000);
+
+    if (!interaction.channel || !interaction.channel.isTextBased()) {
+      await interaction.editReply({ content: '❌ Этот канал не поддерживает отправку сообщений.' });
+      return;
+    }
+
+    const launchEmbed = new EmbedBuilder()
+      .setTitle('🎁 Розыгрыш среди игроков онлайн')
+      .setDescription(
+        `**Приз:** ${reward.label}\n**Сервер:** ${serverName}\n⏰ Заканчивается: <t:${endAtUnix}:R>\n\n` +
+        'Победитель будет выбран случайно среди игроков онлайн в момент завершения.'
+      )
+      .setColor(0x7c3aed)
+      .setFooter({ text: `Длительность: ${durationMinutes} мин.` });
+
+    const giveawayMessage = await interaction.channel.send({ embeds: [launchEmbed] });
+    await interaction.editReply({
+      content: `✅ Розыгрыш запущен! [Перейти](https://discord.com/channels/${interaction.guildId}/${interaction.channelId}/${giveawayMessage.id})`,
+    });
+
+    setTimeout(() => {
+      enqueueOperation(async () => {
+        const channel = await client.channels.fetch(interaction.channelId).catch(() => null);
+        if (!channel || !channel.isTextBased()) {
+          return;
+        }
+        const players = await getOnlinePlayers(serverIds);
+        if (!players || players.length === 0) {
+          const emptyEmbed = new EmbedBuilder()
+            .setTitle('🎁 Розыгрыш среди игроков онлайн')
+            .setDescription(
+              `**Приз:** ${reward.label}\n**Сервер:** ${serverName}\n\n` +
+              '😔 В момент завершения на выбранном сервере не было игроков онлайн.'
+            )
+            .setColor(0x5865f2)
+            .setFooter({ text: 'Розыгрыш завершён без победителя' });
+          const msg = await channel.messages.fetch(giveawayMessage.id).catch(() => null);
+          if (msg) {
+            await msg.edit({ embeds: [emptyEmbed], components: [] }).catch(() => {});
+          }
+          return;
+        }
+
+        const winner = players[Math.floor(Math.random() * players.length)];
+        const winnerLine = formatOnlineGiveawayWinnerLine(winner);
+        const resultEmbed = new EmbedBuilder()
+          .setTitle('🎁 Розыгрыш среди игроков онлайн')
+          .setDescription(
+            `**Приз:** ${reward.label}\n**Сервер:** ${serverName}\n**Игроков онлайн:** ${players.length}\n\n${winnerLine}`
+          )
+          .setColor(0x5865f2)
+          .setFooter({ text: `Случайный выбор из ${players.length} игроков` });
+
+        const msg = await channel.messages.fetch(giveawayMessage.id).catch(() => null);
+        if (msg) {
+          await msg.edit({ embeds: [resultEmbed], components: [] }).catch(() => {});
+        }
+
+        const grantResult = await grantServerGiveawayWinnerReward(
+          winner,
+          reward,
+          `server_${serverKey}`
+        );
+        if (grantResult.granted && grantResult.discordId) {
+          await channel
+            .send({
+              content:
+                `🎉 Победитель <@${grantResult.discordId}> получил **${reward.label}** ` +
+                `и роль **${GIVEAWAY_VIP_ROLE_NAME}**.`,
+            })
+            .catch(() => {});
+          return;
+        }
+        if (grantResult.granted) {
+          await channel
+            .send({
+              content:
+                `🎉 Победитель получил **${reward.label}** по SteamID64.\n` +
+                'Discord-аккаунт не привязан, поэтому роль не выдана.',
+            })
+            .catch(() => {});
+          return;
+        }
+        await channel
+          .send({
+            content: '⚠️ Победитель выбран, но награда не выдана автоматически.',
+          })
+          .catch(() => {});
+      });
+    }, durationMinutes * 60 * 1000);
+    return;
+  }
+
+  if (sub === 'end') {
+    const messageId = interaction.options.getString('message_id', true);
+    const giveaway = Array.from(giveaways.values()).find((g) => g.messageId === messageId);
+    if (!giveaway) {
+      await interaction.reply({ content: '❌ Розыгрыш не найден.', ephemeral: true });
+      return;
+    }
+    if (giveaway.ended) {
+      await interaction.reply({ content: '❌ Розыгрыш уже завершён.', ephemeral: true });
+      return;
+    }
+    await endGiveaway(giveaway.id);
+    await interaction.reply({ content: '✅ Розыгрыш завершён.', ephemeral: true });
+    return;
+  }
+
+  if (sub === 'reroll') {
+    const messageId = interaction.options.getString('message_id', true);
+    const giveaway = Array.from(giveaways.values()).find((g) => g.messageId === messageId);
+    if (!giveaway || !giveaway.ended) {
+      await interaction.reply({ content: '❌ Завершённый розыгрыш не найден.', ephemeral: true });
+      return;
+    }
+    giveaway.winners = pickWinners(giveaway.participants, giveaway.winnersCount);
+    const channel = await client.channels.fetch(giveaway.channelId).catch(() => null);
+    if (channel) {
+      const msg = await channel.messages.fetch(giveaway.messageId).catch(() => null);
+      if (msg) await msg.edit({ embeds: [buildGiveawayEmbed(giveaway, true)], components: [] });
+      const mention = giveaway.winners.length
+        ? `🔁 Перевыбор! Поздравляем ${giveaway.winners.map((w) => `<@${w}>`).join(', ')}! Вы выиграли **${giveaway.prize}**!`
+        : '😔 Нет участников для перевыбора.';
+      await channel.send({ content: mention });
+      await grantGiveawayRewardToWinners(giveaway, 'reroll');
+    }
+    await interaction.reply({ content: '✅ Победитель перевыбран.', ephemeral: true });
+    return;
+  }
+}
+
 async function registerCommands() {
   const rest = new REST({ version: '10' }).setToken(config.token);
   const commandBuilders = [
@@ -4353,6 +4853,7 @@ async function registerCommands() {
     GIVEVIP_COMMAND,
     PROFILE_COMMAND,
     SERVERINFO_COMMAND,
+    GIVEAWAY_COMMAND,
     TICKETPANEL_COMMAND,
     CLOSE_TICKET_COMMAND,
     DELETE_TICKET_COMMAND,
@@ -4453,7 +4954,9 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
     enqueueOperation(() => handleMediaRoleRemoved(newMember));
   }
 
-  const hasVipAfter = [...newRoles].some((roleName) => VIP_ROLE_NAMES.has(roleName));
+  const hasVipAfter = [...newRoles].some(
+    (roleName) => VIP_ROLE_NAMES.has(roleName) || roleName === GIVEAWAY_VIP_ROLE_NAME
+  );
   if (filteredRemovedVipRoles.length > 0 && !hasVipAfter) {
     const roleName = pickBestRole(filteredRemovedVipRoles) || null;
     enqueueOperation(() => handleVipRoleRemoved(newMember, roleName));
@@ -4487,6 +4990,29 @@ client.on('interactionCreate', async (interaction) => {
         await handleTicketClose(interaction);
         return;
       }
+      if (interaction.customId.startsWith('giveaway_join:')) {
+        const giveawayId = interaction.customId.split(':')[1];
+        const giveaway = giveaways.get(giveawayId);
+        if (!giveaway || giveaway.ended) {
+          await interaction.reply({ content: '❌ Розыгрыш уже завершён.', ephemeral: true });
+          return;
+        }
+        const discordId = interaction.user.id;
+        const steam64 = getLinkedSteamId(discordId);
+        if (!steam64) {
+          await interaction.showModal(buildSteamModal(giveawayId));
+          return;
+        }
+        if (giveaway.participants.has(discordId)) {
+          await interaction.reply({ content: '✅ Ты уже участвуешь в розыгрыше!', ephemeral: true });
+          return;
+        }
+        giveaway.participants.add(discordId);
+        const msg = await interaction.channel.messages.fetch(giveaway.messageId).catch(() => null);
+        if (msg) await msg.edit({ embeds: [buildGiveawayEmbed(giveaway)], components: [buildJoinButton(giveawayId)] });
+        await interaction.reply({ content: '🎉 Ты участвуешь в розыгрыше!', ephemeral: true });
+        return;
+      }
       return;
     }
 
@@ -4503,6 +5029,32 @@ client.on('interactionCreate', async (interaction) => {
         interaction.customId === 'ticket_create_modal_en'
       ) {
         await handleTicketCreateModalSubmit(interaction);
+        return;
+      }
+      if (interaction.customId.startsWith('giveaway_steam_modal:')) {
+        const giveawayId = interaction.customId.split(':')[1];
+        const giveaway = giveaways.get(giveawayId);
+        if (!giveaway || giveaway.ended) {
+          await interaction.reply({ content: '❌ Розыгрыш уже завершён.', ephemeral: true });
+          return;
+        }
+        const input = normalizeSteamId64(interaction.fields.getTextInputValue('steamid_input'));
+        if (!isValidSteamId64(input)) {
+          await interaction.reply({ content: getMessagesForLanguage(DEFAULT_LANGUAGE).invalidSteamId, ephemeral: true });
+          return;
+        }
+        const discordId = interaction.user.id;
+        const existingOwner = findDiscordIdBySteam(input);
+        if (existingOwner && existingOwner !== discordId) {
+          await interaction.reply({ content: getMessagesForLanguage(DEFAULT_LANGUAGE).steamidOwned, ephemeral: true });
+          return;
+        }
+        db.links[discordId] = input;
+        await savePrimaryDb();
+        giveaway.participants.add(discordId);
+        const msg = await interaction.channel.messages.fetch(giveaway.messageId).catch(() => null);
+        if (msg) await msg.edit({ embeds: [buildGiveawayEmbed(giveaway)], components: [buildJoinButton(giveawayId)] });
+        await interaction.reply({ content: '🎉 Steam привязан и ты участвуешь в розыгрыше!', ephemeral: true });
         return;
       }
       return;
@@ -4564,6 +5116,15 @@ client.on('interactionCreate', async (interaction) => {
 
     if (interaction.commandName === 'profile') {
       await handleProfileCommand(interaction, interactionLanguage);
+      return;
+    }
+
+    if (interaction.commandName === 'giveaway') {
+      if (!interaction.inGuild()) {
+        await interaction.reply({ content: messages.onlyGuild, ephemeral: true });
+        return;
+      }
+      await handleGiveawayCommand(interaction);
       return;
     }
 
