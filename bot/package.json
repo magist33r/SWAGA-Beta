@@ -2,11 +2,11 @@
   "name": "dayz-vip-bot",
   "version": "1.0.0",
   "description": "Discord bot to manage DayZ VIP whitelist",
-  "main": "index.js",
+  "main": "src/index.js",
   "type": "commonjs",
   "scripts": {
-  "start": "node index.js",
-  "build": "pkg index.js --target node18-win-x64 --output swaga-bot.exe"
+    "start": "node src/index.js",
+    "build": "pkg src/index.js --target node18-win-x64 --output dist/swaga-bot.exe"
   },
   "engines": {
     "node": ">=16.9.0"

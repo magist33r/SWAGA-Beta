@@ -31,7 +31,7 @@ const {
   TextInputBuilder,
   TextInputStyle,
 } = require('discord.js');
-const StatsCard = require('./stats-card/stats-card');
+const StatsCard = require('../stats-card/stats-card');
 
 function stripBom(value) {
   if (!value) {
@@ -4037,7 +4037,7 @@ async function initializeLeaderboardModule() {
 
   let LeaderboardGenerator;
   try {
-    LeaderboardGenerator = require('./leaderboard/leaderboard-generator');
+    LeaderboardGenerator = require('../leaderboard/leaderboard-generator');
   } catch (err) {
     console.warn('[leaderboard] Failed to load module:', err?.message || err);
     console.warn('[leaderboard] Install missing deps and restart.');
@@ -4358,11 +4358,17 @@ async function grantGiveawayRole(discordId, note) {
 
 async function grantGiveawayRewardToWinners(giveaway, reason) {
   if (!giveaway || giveaway.ended !== true || !Array.isArray(giveaway.winners)) {
-    return { granted: 0, skipped: 0 };
+    return { granted: 0, skipped: 0, skippedAlreadyVip: 0, skippedNoLink: 0, alreadyVipWinners: [] };
   }
   const reward = getGiveawayPrizeOption(giveaway.prizeValue);
   if (!reward) {
-    return { granted: 0, skipped: giveaway.winners.length };
+    return {
+      granted: 0,
+      skipped: giveaway.winners.length,
+      skippedAlreadyVip: 0,
+      skippedNoLink: 0,
+      alreadyVipWinners: [],
+    };
   }
   if (!(giveaway.rewardedWinnerIds instanceof Set)) {
     giveaway.rewardedWinnerIds = new Set(
@@ -4374,6 +4380,9 @@ async function grantGiveawayRewardToWinners(giveaway, reason) {
   const grantedEntries = [];
   let dbChanged = false;
   let skipped = 0;
+  let skippedAlreadyVip = 0;
+  let skippedNoLink = 0;
+  const alreadyVipWinners = [];
 
   for (const winnerId of giveaway.winners) {
     const discordId = String(winnerId || '');
@@ -4385,6 +4394,7 @@ async function grantGiveawayRewardToWinners(giveaway, reason) {
     const steam64 = getLinkedSteamId(discordId);
     if (!steam64) {
       skipped += 1;
+      skippedNoLink += 1;
       await logAction('giveaway_reward_skip', {
         serverName: primaryServer.name,
         discordId,
@@ -4397,10 +4407,23 @@ async function grantGiveawayRewardToWinners(giveaway, reason) {
     }
 
     const steamKey = String(steam64);
-    if (!db.whiteList.vip.includes(steamKey)) {
-      ensureVip(steamKey);
-      dbChanged = true;
+    if (db.whiteList.vip.includes(steamKey)) {
+      skipped += 1;
+      skippedAlreadyVip += 1;
+      alreadyVipWinners.push(discordId);
+      giveaway.rewardedWinnerIds.add(discordId);
+      await logAction('giveaway_reward_skip', {
+        serverName: primaryServer.name,
+        discordId,
+        steam64: steamKey,
+        roleName: GIVEAWAY_VIP_ROLE_NAME,
+        expiresAt: null,
+        note: 'already_has_vip',
+      });
+      continue;
     }
+    ensureVip(steamKey);
+    dbChanged = true;
 
     let expiresAt = 0;
     if (reward.durationSeconds === null) {
@@ -4458,6 +4481,9 @@ async function grantGiveawayRewardToWinners(giveaway, reason) {
   return {
     granted: grantedEntries.length,
     skipped,
+    skippedAlreadyVip,
+    skippedNoLink,
+    alreadyVipWinners,
   };
 }
 
@@ -4542,14 +4568,28 @@ async function grantServerGiveawayWinnerReward(winner, reward, reason) {
 
   const steamKey = String(steam64);
   const discordId = findDiscordIdBySteam(steamKey);
+  if (db.whiteList.vip.includes(steamKey)) {
+    await logAction('giveaway_reward_skip', {
+      serverName: primaryServer.name,
+      discordId: discordId || null,
+      steam64: steamKey,
+      roleName: GIVEAWAY_VIP_ROLE_NAME,
+      expiresAt: null,
+      note: 'already_has_vip',
+    });
+    return {
+      granted: false,
+      reason: 'already_has_vip',
+      steam64: steamKey,
+      discordId: discordId || null,
+    };
+  }
+
   const now = unixNow();
   let expiresAt = 0;
   let dbChanged = false;
-
-  if (!db.whiteList.vip.includes(steamKey)) {
-    ensureVip(steamKey);
-    dbChanged = true;
-  }
+  ensureVip(steamKey);
+  dbChanged = true;
 
   if (reward.durationSeconds === null) {
     if (db.vipTimed[steamKey]) {
@@ -4634,7 +4674,16 @@ async function endGiveaway(giveawayId) {
       ? `🎉 Поздравляем ${giveaway.winners.map((w) => `<@${w}>`).join(', ')}! Вы выиграли **${giveaway.prize}**!`
       : '😔 Никто не участвовал в розыгрыше.';
     await channel.send({ content: mention });
-    await grantGiveawayRewardToWinners(giveaway, 'auto_end');
+    const rewardResult = await grantGiveawayRewardToWinners(giveaway, 'auto_end');
+    if (rewardResult?.skippedAlreadyVip > 0 && Array.isArray(rewardResult.alreadyVipWinners)) {
+      const winnerMentions = rewardResult.alreadyVipWinners.map((id) => `<@${id}>`).join(', ');
+      await channel
+        .send({
+          content:
+            `ℹ️ ${winnerMentions} уже имеют активный VIP, поэтому приз им не выдан.`,
+        })
+        .catch(() => {});
+    }
   } catch (err) {
     console.error('[giveaway] end error:', err);
   }
@@ -4768,6 +4817,18 @@ async function handleGiveawayCommand(interaction) {
           reward,
           `server_${serverKey}`
         );
+        if (grantResult.reason === 'already_has_vip') {
+          const target = grantResult.discordId
+            ? `<@${grantResult.discordId}>`
+            : `\`${grantResult.steam64}\``;
+          await channel
+            .send({
+              content:
+                `ℹ️ Победитель ${target} уже имеет активный VIP, поэтому приз не выдан.`,
+            })
+            .catch(() => {});
+          return;
+        }
         if (grantResult.granted && grantResult.discordId) {
           await channel
             .send({
@@ -4830,7 +4891,16 @@ async function handleGiveawayCommand(interaction) {
         ? `🔁 Перевыбор! Поздравляем ${giveaway.winners.map((w) => `<@${w}>`).join(', ')}! Вы выиграли **${giveaway.prize}**!`
         : '😔 Нет участников для перевыбора.';
       await channel.send({ content: mention });
-      await grantGiveawayRewardToWinners(giveaway, 'reroll');
+      const rewardResult = await grantGiveawayRewardToWinners(giveaway, 'reroll');
+      if (rewardResult?.skippedAlreadyVip > 0 && Array.isArray(rewardResult.alreadyVipWinners)) {
+        const winnerMentions = rewardResult.alreadyVipWinners.map((id) => `<@${id}>`).join(', ');
+        await channel
+          .send({
+            content:
+              `ℹ️ ${winnerMentions} уже имеют активный VIP, поэтому приз им не выдан.`,
+          })
+          .catch(() => {});
+      }
     }
     await interaction.reply({ content: '✅ Победитель перевыбран.', ephemeral: true });
     return;

@@ -51,6 +51,14 @@ copy config.example.json config.json
 npm start
 ```
 
+## Структура bot
+
+- `bot/src/index.js` — основной рантайм бота
+- `bot/leaderboard/*` — генерация и логика лидерборда
+- `bot/stats-card/*` — карточка статистики игрока
+- `bot/config.example.json` — шаблон конфига
+- `bot/dist/` — exe сборка и runtime-файлы
+
 ## Конфиг: ключевые блоки
 
 ### Базовые
@@ -129,4 +137,4 @@ cd bot
 npm run build
 ```
 
-По умолчанию билд: `bot/swaga-bot.exe`.
+По умолчанию билд: `bot/dist/swaga-bot.exe`.
