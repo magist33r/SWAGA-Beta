@@ -1,4 +1,4 @@
-﻿if (typeof globalThis.ReadableStream === 'undefined') {
+if (typeof globalThis.ReadableStream === 'undefined') {
   try {
     const { ReadableStream } = require('stream/web');
     if (ReadableStream) {
@@ -14,24 +14,37 @@ const { Readable, Writable } = require('stream');
 const ftp = require('basic-ftp');
 const express = require('express');
 const {
-  ActionRowBuilder,
   AttachmentBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-  ChannelType,
   Client,
   EmbedBuilder,
   GatewayIntentBits,
-  ModalBuilder,
   Partials,
   PermissionFlagsBits,
   REST,
   Routes,
   SlashCommandBuilder,
-  TextInputBuilder,
-  TextInputStyle,
 } = require('discord.js');
-const StatsCard = require('../stats-card/stats-card');
+const StatsCard = require('../modules/stats-card/stats-card');
+const { createMediaModule } = require('../modules/media');
+const { createStatusModule } = require('../modules/status');
+const { createWelcomeModule } = require('../modules/welcome');
+const { createLogsModule } = require('../modules/logs');
+const {
+  VIP_ROLES,
+  VIP_ROLE_NAMES,
+  GIVEAWAY_VIP_ROLE_NAME,
+  GIVEAWAY_PRIZE_OPTIONS,
+  VIPLIST_PAGE_SIZE,
+} = require('../modules/vip/constants');
+const { createVipCommands } = require('../modules/vip/commands');
+const { createVipModule } = require('../modules/vip');
+const {
+  TICKET_IDLE_CLOSE_SECONDS,
+  TICKET_IDLE_CHECK_INTERVAL_MS,
+} = require('../modules/tickets/constants');
+const { createTicketCommands } = require('../modules/tickets/commands');
+const { createTicketsModule } = require('../modules/tickets');
+const { createGiveawayModule } = require('../modules/giveaway');
 
 function stripBom(value) {
   if (!value) {
@@ -47,27 +60,10 @@ function getRuntimeDir() {
 const CONFIG_PATH = path.resolve(process.cwd(), 'config.json');
 const BOT_DB_PATH = path.resolve(getRuntimeDir(), 'bot-db.json');
 
-const VIP_ROLES = new Map([
-  ['VIP Test', 3600],
-  ['VIP 14 Days', 1209600],
-  ['VIP Monthly', 2592000],
-  ['VIP', null],
-]);
-const VIP_ROLE_NAMES = new Set(VIP_ROLES.keys());
-const GIVEAWAY_VIP_ROLE_NAME = 'VIP (Giveaway)';
-const GIVEAWAY_PRIZE_OPTIONS = [
-  { label: 'VIP 24 Hours', value: 'vip_24h', durationSeconds: 24 * 3600 },
-  { label: 'VIP 7 Days', value: 'vip_7d', durationSeconds: 7 * 24 * 3600 },
-  { label: 'VIP 14 Days', value: 'vip_14d', durationSeconds: 14 * 24 * 3600 },
-  { label: 'VIP Monthly', value: 'vip_monthly', durationSeconds: 30 * 24 * 3600 },
-  { label: 'VIP', value: 'vip_forever', durationSeconds: null },
-];
 const MEDIA_ROLE_NAME = 'media';
 const MEMBER_ROLE_NAMES = [':white_check_mark:', '✅'];
 const EVERYONE_TIMEOUT_SECONDS = 3600;
 const EVERYONE_DELETE_HOURS = 1;
-const TICKET_IDLE_CLOSE_SECONDS = 300;
-const TICKET_IDLE_CHECK_INTERVAL_MS = 60000;
 
 const MESSAGES_RU = {
   dmVipActiveForever: '👑 **VIP активирован навсегда** — {tariff} ⭐\n\nДобро пожаловать в элиту SWAGA. Тебе доступны эксклюзивные скины, уникальные пушки и приоритетный вход — на обоих серверах.\n\n🎮 Заходи и доминируй.',
@@ -390,43 +386,19 @@ const WHOIS_COMMAND = new SlashCommandBuilder()
     option.setName('user').setDescription('Target user').setRequired(true)
   );
 
-const VIPLIST_COMMAND = new SlashCommandBuilder()
-  .setName('viplist')
-  .setDescription('List active VIP')
-  .setDMPermission(false)
-  .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
-  .addIntegerOption((option) =>
-    option.setName('page').setDescription('Page number').setMinValue(1)
-  );
-
-const SETVIP_COMMAND = new SlashCommandBuilder()
-  .setName('setvip')
-  .setDescription('Set VIP expiration')
-  .setDMPermission(false)
-  .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
-  .addUserOption((option) =>
-    option.setName('user').setDescription('Target user').setRequired(true)
-  )
-  .addIntegerOption((option) =>
-    option
-      .setName('days')
-      .setDescription('Days until expiration; 0 = forever')
-      .setRequired(true)
-      .setMinValue(0)
-  )
-  .addStringOption((option) => {
-    option.setName('role').setDescription('VIP role (optional)').setRequired(false);
-    for (const roleName of VIP_ROLES.keys()) {
-      option.addChoices({ name: roleName, value: roleName });
-    }
-    return option;
-  });
-
-const STATS_COMMAND = new SlashCommandBuilder()
-  .setName('vipstats')
-  .setDescription('VIP stats')
-  .setDMPermission(false)
-  .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles);
+const {
+  VIPLIST_COMMAND,
+  SETVIP_COMMAND,
+  STATS_COMMAND,
+  REMOVEVIP_COMMAND,
+  GIVEVIP_COMMAND,
+  PROFILE_COMMAND,
+  SERVERINFO_COMMAND,
+} = createVipCommands({
+  SlashCommandBuilder,
+  PermissionFlagsBits,
+  vipRoles: VIP_ROLES,
+});
 
 const PLAYERSTATS_COMMAND = new SlashCommandBuilder()
   .setName('stats')
@@ -466,124 +438,23 @@ function configurePlayerStatsServerOption(commandBuilder, leaderboardConfig) {
   return commandBuilder;
 }
 
-const REMOVEVIP_COMMAND = new SlashCommandBuilder()
-  .setName('removevip')
-  .setDescription('Remove VIP from user')
-  .setDMPermission(false)
-  .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
-  .addUserOption((option) =>
-    option.setName('user').setDescription('Target user').setRequired(true)
-  );
-
-const GIVEVIP_COMMAND = new SlashCommandBuilder()
-  .setName('givevip')
-  .setDescription('Give VIP role')
-  .setDMPermission(false)
-  .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
-  .addUserOption((option) =>
-    option.setName('user').setDescription('Target user').setRequired(true)
-  )
-  .addStringOption((option) => {
-    option.setName('tariff').setDescription('VIP tariff').setRequired(true);
-    for (const roleName of VIP_ROLES.keys()) {
-      option.addChoices({ name: roleName, value: roleName });
-    }
-    return option;
-  });
-
-const PROFILE_COMMAND = new SlashCommandBuilder()
-  .setName('profile')
-  .setDescription('View your VIP profile')
-  .setDMPermission(true);
-
-const SERVERINFO_COMMAND = new SlashCommandBuilder()
-  .setName('serverinfo')
-  .setDescription('Show server VIP statistics')
-  .setDMPermission(false)
-  .setDefaultMemberPermissions(PermissionFlagsBits.Administrator);
-
-
-const GIVEAWAY_COMMAND = new SlashCommandBuilder()
-  .setName('giveaway')
-  .setDescription('Manage giveaways')
-  .setDMPermission(false)
-  .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
-  .addSubcommand((sub) =>
-    sub
-      .setName('create')
-      .setDescription('Create a standard giveaway with a join button')
-      .addStringOption((o) => {
-        o.setName('prize').setDescription('VIP reward').setRequired(true);
-        for (const option of GIVEAWAY_PRIZE_OPTIONS) {
-          o.addChoices({ name: option.label, value: option.value });
-        }
-        return o;
-      })
-      .addIntegerOption((o) => o.setName('duration').setDescription('Duration in minutes').setRequired(true).setMinValue(1).setMaxValue(10080))
-      .addIntegerOption((o) => o.setName('winners').setDescription('Number of winners (default 1)').setMinValue(1).setMaxValue(10))
-  )
-  .addSubcommand((sub) =>
-    sub
-      .setName('server')
-      .setDescription('Pick a random winner from players currently online')
-      .addStringOption((o) => {
-        o.setName('prize').setDescription('VIP reward').setRequired(true);
-        for (const option of GIVEAWAY_PRIZE_OPTIONS) {
-          o.addChoices({ name: option.label, value: option.value });
-        }
-        return o;
-      })
-      .addIntegerOption((o) =>
-        o
-          .setName('duration')
-          .setDescription('Duration in minutes')
-          .setRequired(true)
-          .setMinValue(1)
-          .setMaxValue(10080)
-      )
-      .addStringOption((o) =>
-        o.setName('server').setDescription('Server to pick from').setRequired(false)
-          .addChoices(
-            { name: 'SWAGA 20MM', value: 's1' },
-            { name: 'SWAGA .338', value: 's2' },
-            { name: 'SWAGA VANILLA', value: 's3' },
-            { name: 'All servers', value: 'all' }
-          )
-      )
-  )
-  .addSubcommand((sub) =>
-    sub
-      .setName('end')
-      .setDescription('End a giveaway early and pick a winner')
-      .addStringOption((o) => o.setName('message_id').setDescription('Giveaway message ID').setRequired(true))
-  )
-  .addSubcommand((sub) =>
-    sub
-      .setName('reroll')
-      .setDescription('Reroll winner for ended giveaway')
-      .addStringOption((o) => o.setName('message_id').setDescription('Giveaway message ID').setRequired(true))
-  );
-const TICKETPANEL_COMMAND = new SlashCommandBuilder()
-  .setName('ticketpanel')
-  .setDescription('Post ticket panel in current channel')
-  .setDMPermission(false)
-  .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles);
-
-const CLOSE_TICKET_COMMAND = new SlashCommandBuilder()
-  .setName('close')
-  .setDescription('Close current ticket')
-  .setDMPermission(false);
-
-const DELETE_TICKET_COMMAND = new SlashCommandBuilder()
-  .setName('delete')
-  .setDescription('Delete current ticket')
-  .setDMPermission(false)
-  .setDefaultMemberPermissions(PermissionFlagsBits.Administrator);
+const {
+  TICKETPANEL_COMMAND,
+  CLOSE_TICKET_COMMAND,
+  DELETE_TICKET_COMMAND,
+} = createTicketCommands({
+  SlashCommandBuilder,
+  PermissionFlagsBits,
+});
 
 const config = loadConfig();
 const statsCard = new StatsCard(config);
 const DEFAULT_LANGUAGE = normalizeLanguage(config.language, 'ru');
 const LEADERBOARD_CONFIG = normalizeLeaderboardConfig(config.leaderboard);
+const mediaModule = createMediaModule(config.media);
+const statusModule = createStatusModule(config.status);
+const welcomeModule = createWelcomeModule(config.welcome);
+const logsModule = createLogsModule(config.logs);
 configurePlayerStatsServerOption(PLAYERSTATS_COMMAND, LEADERBOARD_CONFIG);
 const LEADERBOARD_ENABLED = LEADERBOARD_CONFIG.enabled;
 const AUDIT_LABELS = AUDIT_LABELS_BY_LANG[DEFAULT_LANGUAGE] || AUDIT_LABELS_RU;
@@ -597,7 +468,6 @@ const primaryServer = pickPrimaryServer(servers, config.primaryServer);
 const LOG_PATH = path.resolve(process.cwd(), config.logPath);
 const CHECK_INTERVAL_MS = Math.max(10, Number(config.checkIntervalSeconds) || 60) * 1000;
 const NOTIFY_THRESHOLDS = buildNotifyThresholds(config.notifyBeforeHours ?? 24);
-const VIPLIST_PAGE_SIZE = 20;
 const AUDIT_ACTIONS = new Set([
   'role_add',
   'manual_remove',
@@ -620,14 +490,18 @@ const AUDIT_ACTIONS = new Set([
   'ticket_delete',
 ]);
 
-logStartupInfo(config, servers, primaryServer);
+logStartupInfo(config, servers, primaryServer, {
+  mediaModule,
+  statusModule,
+  welcomeModule,
+  logsModule,
+});
 
 let db = null;
 let opQueue = Promise.resolve();
 let primaryGuild = null;
 let auditChannel = null;
 let leaderboardGenerators = new Map();
-const giveaways = new Map();
 const invalidLinks = new Set();
 const roleChangeSkips = new Set();
 
@@ -635,11 +509,133 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildModeration,
     GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildVoiceStates,
     GatewayIntentBits.MessageContent,
   ],
   partials: [Partials.GuildMember, Partials.User],
 });
+
+welcomeModule.register(client);
+logsModule.register(client);
+
+const vipModule = createVipModule({
+  VIP_ROLES,
+  VIP_ROLE_NAMES,
+  GIVEAWAY_VIP_ROLE_NAME,
+  MEDIA_ROLE_NAME,
+  ROLE_REMOVE_REASON,
+  NOTIFY_THRESHOLDS,
+  servers,
+  getDb: () => db,
+  getPrimaryGuild: () => primaryGuild,
+  getPrimaryServerName: () => primaryServer.name,
+  getMessagesForLanguage,
+  formatMessage,
+  formatTariffDisplay,
+  resolveUserLanguage,
+  getLinkedSteamId,
+  findDiscordIdBySteam,
+  sendDm,
+  sendDmToUserId,
+  logAction,
+  ensureVip,
+  ensureMedia,
+  removeVip,
+  removeMedia,
+  persistAndSync,
+  savePrimaryDb,
+  addHistory,
+  unixNow,
+  markRoleSkip,
+});
+
+const {
+  buildVipEmbed,
+  notifyVipRemoved,
+  removeDiscordVipRoles,
+  runExpirationCheck,
+  handleProfileCommand,
+  handleServerInfoCommand,
+  handleVipRoleAdded,
+  handleVipRoleRemoved,
+  handleMediaRoleAdded,
+  handleMediaRoleRemoved,
+} = vipModule;
+
+const ticketsModule = createTicketsModule({
+  TICKET_IDLE_CLOSE_SECONDS,
+  DEFAULT_LANGUAGE,
+  getConfig: () => config,
+  getDb: () => db,
+  getClient: () => client,
+  getPrimaryGuild: () => primaryGuild,
+  getPrimaryServerName: () => primaryServer.name,
+  normalizeLanguage,
+  resolveUserLanguage,
+  rememberUserLanguage,
+  getMessagesForLanguage,
+  formatMessage,
+  normalizeSteamId64,
+  isValidSteamId64,
+  getLinkedSteamId,
+  findDiscordIdBySteam,
+  formatTariffDisplay,
+  hasManageRoles,
+  addHistory,
+  logAction,
+  enqueueOperation,
+  enqueueBotDbSave,
+  extractMetaPayload,
+  assignMemberRole,
+  unixNow,
+  savePrimaryDb,
+  clearInvalidLink: (discordId) => invalidLinks.delete(discordId),
+  buildCfToolsProfileUrl,
+});
+
+const {
+  showTicketCreateModal,
+  handleTicketCreateModalSubmit,
+  handleTicketClose,
+  handleTicketPanelCommand,
+  handleTicketDeleteCommand,
+  handleTicketOwnerFirstMessage,
+  runTicketInactivityCheck,
+} = ticketsModule;
+
+const giveawayModule = createGiveawayModule({
+  client,
+  SlashCommandBuilder,
+  PermissionFlagsBits,
+  prizeOptions: GIVEAWAY_PRIZE_OPTIONS,
+  giveawayVipRoleName: GIVEAWAY_VIP_ROLE_NAME,
+  getConfig: () => config,
+  getPrimaryGuild: () => primaryGuild,
+  getPrimaryServerName: () => primaryServer.name,
+  getDb: () => db,
+  getMessagesForLanguage,
+  getDefaultLanguage: () => DEFAULT_LANGUAGE,
+  getLinkedSteamId,
+  normalizeSteamId64,
+  isValidSteamId64,
+  findDiscordIdBySteam,
+  fetchGuildMember,
+  ensureVip,
+  persistAndSync,
+  addHistory,
+  logAction,
+  sendDmToUserId,
+  buildVipEmbed,
+  resolveUserLanguage,
+  unixNow,
+  enqueueOperation,
+  savePrimaryDb,
+  buildCfToolsProfileUrl,
+});
+
+const GIVEAWAY_COMMAND = giveawayModule.command;
 
 function loadConfig() {
   try {
@@ -673,7 +669,8 @@ function maskSecret(value) {
   return `${text.slice(0, 3)}...${text.slice(-3)}`;
 }
 
-function logStartupInfo(config, servers, primaryServer) {
+function logStartupInfo(config, servers, primaryServer, modules = {}) {
+  const { mediaModule, statusModule, welcomeModule, logsModule } = modules;
   console.log(
     `[startup] cwd=${process.cwd()} runtimeDir=${getRuntimeDir()} execPath=${process.execPath} pkg=${!!process.pkg}`
   );
@@ -706,6 +703,25 @@ function logStartupInfo(config, servers, primaryServer) {
     const serverKeys = LEADERBOARD_CONFIG.servers.map((entry) => entry.key).join(',') || '-';
     console.log(
       `[startup] leaderboard enabled=true command=/${LEADERBOARD_CONFIG.commandName} servers=${serverKeys} default=${LEADERBOARD_CONFIG.defaultServerKey || '-'} autoPostChannelId=${LEADERBOARD_CONFIG.autoPostChannelId || '-'} backgroundRefresh=${LEADERBOARD_CONFIG.backgroundRefreshEnabled ? LEADERBOARD_CONFIG.backgroundRefreshIntervalMs : 'off'}`
+    );
+  }
+  if (mediaModule?.enabled) {
+    const channels = mediaModule.channelIds.join(',') || '-';
+    console.log(`[startup] media enabled=true channels=${channels}`);
+  }
+  if (statusModule?.enabled) {
+    console.log(
+      `[startup] status enabled=true type=${statusModule.typeKey || 'playing'} text=${statusModule.text || '-'}`
+    );
+  }
+  if (welcomeModule?.enabled) {
+    console.log(
+      `[startup] welcome enabled=true channelId=${welcomeModule.channelId || '-'}`
+    );
+  }
+  if (logsModule?.enabled) {
+    console.log(
+      `[startup] logs enabled=true channelId=${logsModule.channelId || '-'} voice=${logsModule.includeVoice} messages=${logsModule.includeMessages}`
     );
   }
 }
@@ -762,6 +778,51 @@ function normalizeConfig(raw) {
     panelChannelId: String(ticketsCfg.panelChannelId || '').trim(),
     supportRoleId: String(ticketsCfg.supportRoleId || '').trim(),
   };
+  const mediaCfg = config.media && typeof config.media === 'object' ? { ...config.media } : {};
+  mediaCfg.enabled = Boolean(mediaCfg.enabled);
+  const mediaChannelsRaw = mediaCfg.channelIds ?? mediaCfg.channels ?? [];
+  if (Array.isArray(mediaChannelsRaw)) {
+    mediaCfg.channelIds = mediaChannelsRaw
+      .map((id) => String(id || '').trim())
+      .filter(Boolean);
+  } else if (typeof mediaChannelsRaw === 'string') {
+    mediaCfg.channelIds = mediaChannelsRaw
+      .split(',')
+      .map((id) => id.trim())
+      .filter(Boolean);
+  } else {
+    mediaCfg.channelIds = [];
+  }
+  mediaCfg.notifyOnDelete = mediaCfg.notifyOnDelete !== false;
+  mediaCfg.announceAuthor = mediaCfg.announceAuthor !== false;
+  mediaCfg.likeEmoji = String(mediaCfg.likeEmoji || '👍').trim() || '👍';
+  mediaCfg.dislikeEmoji = String(mediaCfg.dislikeEmoji || '👎').trim() || '👎';
+  config.media = mediaCfg;
+
+  const statusCfg = config.status && typeof config.status === 'object' ? { ...config.status } : {};
+  statusCfg.enabled = statusCfg.enabled === true;
+  statusCfg.text = String(statusCfg.text || '').trim();
+  statusCfg.type = String(statusCfg.type || 'playing').trim().toLowerCase();
+  config.status = statusCfg;
+
+  const welcomeCfg = config.welcome && typeof config.welcome === 'object' ? { ...config.welcome } : {};
+  welcomeCfg.enabled = welcomeCfg.enabled === true;
+  welcomeCfg.channelId = String(welcomeCfg.channelId || '').trim();
+  welcomeCfg.rulesChannelId = String(welcomeCfg.rulesChannelId || '').trim();
+  welcomeCfg.infoChannelId = String(welcomeCfg.infoChannelId || '').trim();
+  welcomeCfg.donateChannelId = String(welcomeCfg.donateChannelId || '').trim();
+  welcomeCfg.projectName = String(welcomeCfg.projectName || 'SWAGA').trim() || 'SWAGA';
+  welcomeCfg.titlePrefix = String(welcomeCfg.titlePrefix || '👋 Добро пожаловать').trim() || '👋 Добро пожаловать';
+  welcomeCfg.color = Number(welcomeCfg.color) || 0xe74c3c;
+  config.welcome = welcomeCfg;
+
+  const logsCfg = config.logs && typeof config.logs === 'object' ? { ...config.logs } : {};
+  logsCfg.enabled = logsCfg.enabled === true;
+  logsCfg.channelId = String(logsCfg.channelId || '').trim();
+  logsCfg.includeVoice = logsCfg.includeVoice !== false;
+  logsCfg.includeMessages = logsCfg.includeMessages !== false;
+  config.logs = logsCfg;
+
   return config;
 }
 
@@ -2373,552 +2434,6 @@ async function sendDmToUserId(discordId, payload) {
   }
 }
 
-function buildVipEmbed(roleName, expiresAt, language) {
-  const messages = getMessagesForLanguage(language);
-  const description = expiresAt === null
-    ? formatMessage(messages.dmVipActiveForever, {
-        tariff: formatTariffDisplay(roleName, language),
-      })
-    : formatMessage(messages.dmVipActiveTimed, {
-        tariff: formatTariffDisplay(roleName, language),
-        expiresAt,
-      });
-  return new EmbedBuilder()
-    .setDescription(description)
-    .setColor(0xffffff);
-}
-
-function buildExpiryWarningEmbed(roleName, expiresAt, language, thresholdSeconds) {
-  const messages = getMessagesForLanguage(language);
-  const isEarly = thresholdSeconds > 86400;
-  return new EmbedBuilder()
-    .setDescription(
-      formatMessage(isEarly ? messages.dmExpiryWarningEarly : messages.dmExpiryWarning, {
-        tariff: formatTariffDisplay(roleName, language),
-        expiresAt,
-      })
-    )
-    .setColor(isEarly ? 0x378add : 0xffa940);
-}
-
-function buildVipExpiredEmbed(roleName, language) {
-  const messages = getMessagesForLanguage(language);
-  return new EmbedBuilder()
-    .setDescription(
-      formatMessage(messages.dmVipExpired, {
-        tariff: formatTariffDisplay(roleName, language),
-      })
-    )
-    .setColor(0xff4d4f);
-}
-
-function resolveVipRemovalReason(language, reasonCode, context = {}) {
-  const messages = getMessagesForLanguage(language);
-  switch (reasonCode) {
-    case 'admin':
-      return formatMessage(messages.vipRemoveReasonAdmin, {
-        admin: context.admin || 'unknown',
-      });
-    case 'api':
-      return messages.vipRemoveReasonApi;
-    case 'left_guild':
-      return messages.vipRemoveReasonLeftGuild;
-    case 'startup_check':
-      return messages.vipRemoveReasonStartupCheck;
-    case 'role_removed':
-    default:
-      return messages.vipRemoveReasonRoleRemoved;
-  }
-}
-
-function buildVipRemovedEmbed(language, reasonCode, context = {}) {
-  const messages = getMessagesForLanguage(language);
-  const reason = resolveVipRemovalReason(language, reasonCode, context);
-  return new EmbedBuilder()
-    .setDescription(
-      formatMessage(messages.dmVipRemoved, {
-        reason,
-      })
-    )
-    .setColor(0xff4d4f);
-}
-
-async function notifyVipRemoved(discordId, reasonCode, context = {}) {
-  if (!discordId) {
-    return;
-  }
-  const language = resolveUserLanguage(discordId, primaryGuild?.preferredLocale);
-  await sendDmToUserId(discordId, {
-    embeds: [buildVipRemovedEmbed(language, reasonCode, context)],
-  });
-}
-
-function buildRoleActivatedEmbed(roleName, language) {
-  const messages = getMessagesForLanguage(language);
-  return new EmbedBuilder()
-    .setDescription(formatMessage(messages.dmRoleActivated, { roleName }))
-    .setColor(0xffffff);
-}
-
-function buildMissingLinkEmbed(roleName, language) {
-  const messages = getMessagesForLanguage(language);
-  return new EmbedBuilder()
-    .setDescription(formatMessage(messages.dmMissingLink, { roleName }))
-    .setColor(0xff4d4f);
-}
-
-async function handleVipRoleAdded(member, roleName) {
-  const discordId = member.id;
-  const language = resolveUserLanguage(discordId, member.guild?.preferredLocale);
-  const steam64 = getLinkedSteamId(discordId);
-  if (!steam64) {
-    await logAction('missing_link', {
-      discordId,
-      steam64: null,
-      roleName,
-      expiresAt: null,
-      note: 'role_add_no_link',
-    });
-    await sendDm(member, { embeds: [buildMissingLinkEmbed(roleName, language)] });
-    return;
-  }
-
-  const steamKey = String(steam64);
-  const duration = VIP_ROLES.get(roleName);
-  const now = unixNow();
-  const expiresAt = duration === null ? null : now + duration;
-
-  const hadVip = db.whiteList.vip.includes(steamKey);
-  const existing = db.vipTimed[steamKey];
-  const existingExpiresAt =
-    existing && Number(existing.expiresAt) > 0 ? Number(existing.expiresAt) : 0;
-  const hasActiveTimed = existingExpiresAt > now;
-  const isForever = duration === null;
-  const hasVip = hadVip;
-  const sameRole = !existing?.roleName || existing.roleName === roleName;
-
-  ensureVip(steamKey);
-  const vipAdded = !hadVip && db.whiteList.vip.includes(steamKey);
-
-  if ((isForever && hasVip && !existingExpiresAt) || (!isForever && hasActiveTimed && sameRole)) {
-    if (vipAdded) {
-      await persistAndSync();
-    }
-    await logAction('role_add_skip', {
-      discordId,
-      steam64: steamKey,
-      roleName,
-      expiresAt: existingExpiresAt || 0,
-      note: 'already_active',
-    });
-    return;
-  }
-
-  if (duration === null) {
-    delete db.vipTimed[steamKey];
-  } else {
-    db.vipTimed[steamKey] = {
-      issuedAt: now,
-      expiresAt,
-      roleName,
-      source: 'role_add',
-      reason: 'auto',
-    };
-  }
-
-  addHistory('role_add', {
-    discordId,
-    steam64: steamKey,
-    roleName,
-    expiresAt,
-    note: 'auto',
-  });
-
-  await persistAndSync();
-
-  const embed = buildVipEmbed(roleName, duration === null ? null : expiresAt, language);
-  await sendDm(member, { embeds: [embed] });
-
-  await logAction('role_add', {
-    discordId,
-    steam64: steamKey,
-    roleName,
-    expiresAt: expiresAt === null ? 0 : expiresAt,
-    note: 'auto',
-  });
-}
-
-async function handleVipRoleRemoved(member, roleName) {
-  const discordId = member.id;
-  const steam64 = getLinkedSteamId(discordId);
-  if (!steam64) {
-    await logAction('missing_link', {
-      discordId,
-      steam64: null,
-      roleName,
-      expiresAt: null,
-      note: 'role_remove_no_link',
-    });
-    return;
-  }
-
-  const steamKey = String(steam64);
-  removeVip(steamKey);
-  delete db.vipTimed[steamKey];
-
-  addHistory('manual_remove', {
-    discordId,
-    steam64: steamKey,
-    roleName,
-    expiresAt: null,
-    note: 'manual',
-  });
-
-  await persistAndSync();
-  await notifyVipRemoved(discordId, 'role_removed');
-
-  await logAction('manual_remove', {
-    discordId,
-    steam64: steamKey,
-    roleName,
-    expiresAt: 0,
-    note: 'manual',
-  });
-}
-
-async function handleMediaRoleAdded(member) {
-  const discordId = member.id;
-  const language = resolveUserLanguage(discordId, member.guild?.preferredLocale);
-  const steam64 = getLinkedSteamId(discordId);
-  if (!steam64) {
-    await logAction('media_missing_link', {
-      discordId,
-      steam64: null,
-      roleName: MEDIA_ROLE_NAME,
-      expiresAt: null,
-      note: 'role_add_no_link',
-    });
-    await sendDm(member, { embeds: [buildMissingLinkEmbed(MEDIA_ROLE_NAME, language)] });
-    return;
-  }
-
-  const steamKey = String(steam64);
-  ensureMedia(steamKey);
-
-  addHistory('media_add', {
-    discordId,
-    steam64: steamKey,
-    roleName: MEDIA_ROLE_NAME,
-    expiresAt: 0,
-    note: 'auto',
-  });
-
-  await persistAndSync();
-
-  await sendDm(member, { embeds: [buildRoleActivatedEmbed(MEDIA_ROLE_NAME, language)] });
-
-  await logAction('media_add', {
-    discordId,
-    steam64: steamKey,
-    roleName: MEDIA_ROLE_NAME,
-    expiresAt: 0,
-    note: 'auto',
-  });
-}
-
-async function handleMediaRoleRemoved(member) {
-  const discordId = member.id;
-  const steam64 = getLinkedSteamId(discordId);
-  if (!steam64) {
-    await logAction('media_missing_link', {
-      discordId,
-      steam64: null,
-      roleName: MEDIA_ROLE_NAME,
-      expiresAt: null,
-      note: 'role_remove_no_link',
-    });
-    return;
-  }
-
-  const steamKey = String(steam64);
-  removeMedia(steamKey);
-
-  addHistory('media_remove', {
-    discordId,
-    steam64: steamKey,
-    roleName: MEDIA_ROLE_NAME,
-    expiresAt: 0,
-    note: 'manual',
-  });
-
-  await persistAndSync();
-
-  await logAction('media_remove', {
-    discordId,
-    steam64: steamKey,
-    roleName: MEDIA_ROLE_NAME,
-    expiresAt: 0,
-    note: 'manual',
-  });
-}
-
-async function removeDiscordVipRoles(discordId, note) {
-  if (!primaryGuild) {
-    return;
-  }
-  let member;
-  try {
-    member = await primaryGuild.members.fetch(discordId);
-  } catch (err) {
-    await logAction('member_fetch_fail', {
-      discordId,
-      steam64: db.links[discordId] || null,
-      roleName: null,
-      expiresAt: null,
-      note: err.message || 'fetch_failed',
-    });
-    return;
-  }
-
-  const rolesToRemove = member.roles.cache.filter(
-    (role) => VIP_ROLE_NAMES.has(role.name) || role.name === GIVEAWAY_VIP_ROLE_NAME
-  );
-  if (!rolesToRemove.size) {
-    return;
-  }
-  for (const role of rolesToRemove.values()) {
-    markRoleSkip(discordId, role.name);
-  }
-
-  try {
-    await member.roles.remove(
-      rolesToRemove.map((role) => role.id),
-      note
-    );
-  } catch (err) {
-    await logAction('role_remove_fail', {
-      discordId,
-      steam64: db.links[discordId] || null,
-      roleName: null,
-      expiresAt: null,
-      note: err.message || 'role_remove_failed',
-    });
-  }
-}
-
-async function expireVip(steam64, record) {
-  removeVip(steam64);
-  delete db.vipTimed[steam64];
-
-  const discordId = findDiscordIdBySteam(steam64);
-
-  addHistory('expire_remove', {
-    discordId,
-    steam64,
-    roleName: record.roleName || null,
-    expiresAt: record.expiresAt || null,
-    note: 'expire',
-  });
-
-  await persistAndSync();
-
-  await logAction('expire_remove', {
-    discordId,
-    steam64,
-    roleName: record.roleName || null,
-    expiresAt: record.expiresAt || null,
-    note: 'expire',
-  });
-
-  if (discordId) {
-    const language = resolveUserLanguage(discordId, primaryGuild?.preferredLocale);
-    await sendDmToUserId(discordId, {
-      embeds: [buildVipExpiredEmbed(record.roleName || 'VIP', language)],
-    });
-    await removeDiscordVipRoles(discordId, ROLE_REMOVE_REASON);
-  }
-}
-
-async function notifyVipExpiring(steam64, record, thresholdSeconds) {
-  const discordId = findDiscordIdBySteam(steam64);
-  if (!discordId) {
-    await logAction('expire_warn_missing_link', {
-      serverName: primaryServer.name,
-      discordId: null,
-      steam64,
-      roleName: record.roleName || null,
-      expiresAt: record.expiresAt || null,
-      note: `threshold=${thresholdSeconds}`,
-    });
-    return;
-  }
-
-  const language = resolveUserLanguage(discordId, primaryGuild?.preferredLocale);
-  await sendDmToUserId(discordId, {
-    embeds: [buildExpiryWarningEmbed(record.roleName || 'VIP', record.expiresAt, language, thresholdSeconds)],
-  });
-
-  await logAction('expire_warn', {
-    serverName: primaryServer.name,
-    discordId,
-    steam64,
-    roleName: record.roleName || null,
-    expiresAt: record.expiresAt || null,
-    note: `threshold=${thresholdSeconds}`,
-  });
-}
-
-async function runExpirationCheck() {
-  if (!db) {
-    return;
-  }
-  const now = unixNow();
-  const expirations = [];
-  let notifyDirty = false;
-
-  for (const [steam64, record] of Object.entries(db.vipTimed)) {
-    const expiresAt = Number(record.expiresAt) || 0;
-    if (expiresAt > 0 && now >= expiresAt) {
-      expirations.push([steam64, record]);
-      continue;
-    }
-    if (!expiresAt || !NOTIFY_THRESHOLDS.length) {
-      continue;
-    }
-
-    const remaining = expiresAt - now;
-    if (remaining <= 0) {
-      continue;
-    }
-
-    const notified = Array.isArray(record.notified) ? record.notified.map(Number) : [];
-    for (const threshold of NOTIFY_THRESHOLDS) {
-      if (remaining <= threshold && !notified.includes(threshold)) {
-        await notifyVipExpiring(steam64, record, threshold);
-        notified.push(threshold);
-        record.notified = notified;
-        notifyDirty = true;
-      }
-    }
-  }
-
-  for (const [steam64, record] of expirations) {
-    await expireVip(steam64, record);
-  }
-
-  if (notifyDirty) {
-    await savePrimaryDb();
-  }
-}
-
-async function handleProfileCommand(interaction, interactionLanguage) {
-  const messages = getMessagesForLanguage(interactionLanguage);
-  const discordId = interaction.user.id;
-  const steam64 = getLinkedSteamId(discordId);
-  if (!steam64) {
-    await interaction.reply({
-      content: messages.profileNoLink,
-      ephemeral: true,
-    });
-    return;
-  }
-
-  const steamKey = String(steam64);
-  const timed = db.vipTimed[steamKey];
-  const isActive = db.whiteList.vip.includes(steamKey);
-  let vipStatus = messages.profileInactive;
-  let tariff = '-';
-
-  if (isActive) {
-    if (timed && Number(timed.expiresAt) > 0) {
-      vipStatus = formatMessage(messages.profileActiveUntil, {
-        expiresAt: Number(timed.expiresAt),
-      });
-      tariff = formatTariffDisplay(timed.roleName || 'VIP', interactionLanguage);
-    } else {
-      vipStatus = messages.profileActiveForever;
-      tariff = formatTariffDisplay(timed?.roleName || 'VIP', interactionLanguage);
-    }
-  }
-
-  const relevantActions = new Set([
-    'role_add',
-    'api_givevip',
-    'command_givevip',
-    'api_setvip',
-    'command_setvip',
-    'manual_set',
-  ]);
-  const userHistory = Array.isArray(db.history)
-    ? db.history
-        .filter((entry) => entry.discordId === discordId && relevantActions.has(entry.action))
-        .slice(-5)
-        .reverse()
-    : [];
-  const historyLines =
-    userHistory.length > 0
-      ? userHistory
-          .map((entry) =>
-            formatMessage(messages.profileHistoryLine, {
-              tariff: formatTariffDisplay(entry.roleName || 'VIP', interactionLanguage),
-              issuedAt: Number(entry.ts) || unixNow(),
-            })
-          )
-          .join('\n')
-      : messages.profileHistoryEmpty;
-
-  const embed = new EmbedBuilder()
-    .setTitle(messages.profileTitle)
-    .setColor(0xffffff)
-    .addFields(
-      { name: messages.profileFieldSteam, value: steamKey, inline: false },
-      { name: messages.profileFieldVip, value: vipStatus, inline: true },
-      { name: messages.profileFieldTariff, value: tariff, inline: true },
-      { name: messages.profileFieldHistory, value: historyLines, inline: false }
-    )
-    .setTimestamp();
-
-  await interaction.reply({
-    embeds: [embed],
-    ephemeral: true,
-  });
-}
-
-async function handleServerInfoCommand(interaction, interactionLanguage) {
-  const messages = getMessagesForLanguage(interactionLanguage);
-  const now = unixNow();
-  const total = new Set(db.whiteList.vip.map(String)).size;
-  const links = Object.keys(db.links).length;
-  const timedEntries = Object.entries(db.vipTimed).filter(
-    ([steam64, record]) =>
-      db.whiteList.vip.includes(String(steam64)) && Number(record.expiresAt) > 0
-  );
-  const expiring24h = timedEntries.filter(([, record]) => {
-    const expiresAt = Number(record.expiresAt) || 0;
-    return expiresAt > now && expiresAt - now <= 86400;
-  }).length;
-  const serverLines =
-    servers
-      .map((server) => `- **${server.name}** (\`${server.type}\`)`)
-      .join('\n') || '-';
-
-  const embed = new EmbedBuilder()
-    .setTitle(messages.serverinfoTitle)
-    .setColor(0x5865f2)
-    .addFields(
-      { name: messages.serverinfoFieldVip, value: String(total), inline: true },
-      { name: messages.serverinfoFieldLinks, value: String(links), inline: true },
-      { name: messages.serverinfoFieldExpiring, value: String(expiring24h), inline: true },
-      { name: messages.serverinfoFieldServers, value: serverLines, inline: false }
-    )
-    .setTimestamp();
-
-  await interaction.reply({
-    embeds: [embed],
-    ephemeral: true,
-  });
-}
-
 async function sendDailyBackup() {
   const channelId = String(config.backupChannelId || '').trim();
   if (!channelId || !client.isReady() || !db) {
@@ -2959,819 +2474,6 @@ function startDailyBackup() {
     }, dayMs);
   }, dayMs);
   console.log('[backup] Daily backup scheduled.');
-}
-
-function getTicketConfig() {
-  return config.tickets || {};
-}
-
-function getTicketMessages(language) {
-  const normalized = normalizeLanguage(language, DEFAULT_LANGUAGE);
-  if (normalized === 'en') {
-    return {
-      missingConfig: '⚠️ Ticket system is not configured. Contact an administrator.',
-      ticketCreated: '✅ Ticket created: <#{channelId}>',
-      ticketAlreadyExists: 'ℹ️ You already have an open ticket: <#{channelId}>',
-      ticketCreateFailed: '⚠️ Failed to create ticket. Check bot permissions.',
-      notTicketChannel: '⚠️ This channel is not a ticket.',
-      ticketClosed: '✅ Ticket closed.',
-      noPermDelete: '🚫 Only administrators can delete tickets.',
-      ticketDeleted: '✅ Ticket deleted.',
-      ticketDeleteFailed: '⚠️ Failed to delete ticket channel.',
-      noPermPanel: '🚫 Not enough permissions.',
-      panelPosted: '✅ Ticket panel posted in <#{channelId}>.',
-      panelPostFailed: '⚠️ Failed to post ticket panel.',
-      modalTitle: 'Open ticket',
-      modalSteamLabel: 'Your SteamID64',
-      modalSteamPlaceholder: '7656119xxxxxxxxxx',
-      noVip: '❌ No VIP',
-      vipForever: '✅ Forever',
-      vipExpired: '❌ Expired',
-      vipUntil: '✅ Until <t:{expiresAt}:F>',
-      tariffField: 'Tariff',
-      supportTitle: '📩 SWAGA Support',
-      supportDescription:
-        'Choose a language and press the button below to open a ticket.\n\n' +
-        '> The ticket is visible only to you and the support team.',
-      supportFooter: 'SWAGA Support',
-      openTitle: '🎫 New ticket',
-      openDescription:
-        'Describe your issue or question. A support member will reply as soon as possible.',
-      closeTitle: '🔒 Ticket closed',
-      closeDescription:
-        'Ticket was closed by <@{closedBy}>.\nThe channel has been moved to archive mode.',
-      autoCloseTitle: '🔒 Ticket closed automatically',
-      autoCloseDescription:
-        'Ticket was closed automatically because no message from ticket owner was sent within 5 minutes.',
-      closeButton: '🔒 Close ticket',
-      createButtonRu: 'Ticket (RU)',
-      createButtonEn: 'Make a ticket',
-      fieldDiscord: 'Discord',
-      fieldSteam: 'SteamID64',
-      fieldVip: 'VIP',
-    };
-  }
-
-  return {
-    missingConfig: '⚠️ Тикет-система не настроена. Свяжитесь с администратором.',
-    ticketCreated: '✅ Тикет создан: <#{channelId}>',
-    ticketAlreadyExists: 'ℹ️ У вас уже есть открытый тикет: <#{channelId}>',
-    ticketCreateFailed: '⚠️ Не удалось создать тикет. Проверьте права бота.',
-    notTicketChannel: '⚠️ Этот канал не является тикетом.',
-    ticketClosed: '✅ Тикет закрыт.',
-    noPermDelete: '🚫 Удалять тикеты могут только администраторы.',
-    ticketDeleted: '✅ Тикет удалён.',
-    ticketDeleteFailed: '⚠️ Не удалось удалить тикет-канал.',
-    noPermPanel: '🚫 Недостаточно прав.',
-    panelPosted: '✅ Панель тикетов размещена в <#{channelId}>.',
-    panelPostFailed: '⚠️ Не удалось разместить панель тикетов.',
-    modalTitle: 'Открытие тикета',
-    modalSteamLabel: 'Ваш SteamID64',
-    modalSteamPlaceholder: '7656119xxxxxxxxxx',
-    noVip: '❌ Нет VIP',
-    vipForever: '✅ Навсегда',
-    vipExpired: '❌ Истёк',
-    vipUntil: '✅ До <t:{expiresAt}:F>',
-    tariffField: 'Тариф',
-    supportTitle: '📩 Поддержка SWAGA',
-    supportDescription:
-      'Выберите язык и нажмите кнопку ниже, чтобы открыть тикет.\n\n' +
-      '> Тикет увидят только вы и команда администраторов.',
-    supportFooter: 'SWAGA Support',
-    openTitle: '🎫 Новый тикет',
-    openDescription:
-      'Опишите вашу проблему или вопрос. Администратор ответит в ближайшее время.',
-    closeTitle: '🔒 Тикет закрыт',
-    closeDescription:
-      'Тикет закрыт пользователем <@{closedBy}>.\nКанал переведён в режим архива.',
-    autoCloseTitle: '🔒 Тикет закрыт автоматически',
-    autoCloseDescription:
-      'Тикет автоматически закрыт, потому что владелец не отправил ни одного сообщения в течение 5 минут.',
-    closeButton: '🔒 Закрыть тикет',
-    createButtonRu: 'Создать тикет',
-    createButtonEn: 'Make a ticket',
-    fieldDiscord: 'Discord',
-    fieldSteam: 'SteamID64',
-    fieldVip: 'VIP',
-  };
-}
-
-function buildCfToolsProfileUrl(steam64) {
-  return `https://app.cftools.cloud/profile/${encodeURIComponent(String(steam64 || '').trim())}`;
-}
-
-function formatTicketSteamFieldValue(steam64) {
-  if (!steam64) {
-    return '-';
-  }
-  const normalized = String(steam64).trim();
-  if (!isValidSteamId64(normalized)) {
-    return normalized;
-  }
-  const profileUrl = buildCfToolsProfileUrl(normalized);
-  return `[${normalized}](${profileUrl})`;
-}
-
-function buildTicketOpenEmbed(member, steam64, language) {
-  const ticketMessages = getTicketMessages(language);
-  const fields = [
-    {
-      name: ticketMessages.fieldDiscord,
-      value: `<@${member.id}> (${member.id})`,
-      inline: true,
-    },
-    {
-      name: ticketMessages.fieldSteam,
-      value: formatTicketSteamFieldValue(steam64),
-      inline: true,
-    },
-  ];
-
-  return new EmbedBuilder()
-    .setTitle(ticketMessages.openTitle)
-    .setColor(0x5865f2)
-    .setDescription(ticketMessages.openDescription)
-    .addFields(fields)
-    .setTimestamp();
-}
-
-function buildTicketPanelEmbed(language) {
-  const ticketMessages = getTicketMessages(language);
-  return new EmbedBuilder()
-    .setTitle(ticketMessages.supportTitle)
-    .setColor(0x5865f2)
-    .setDescription(ticketMessages.supportDescription)
-    .setFooter({ text: ticketMessages.supportFooter })
-    .setTimestamp();
-}
-
-function buildTicketClosedEmbed(closedBy, language) {
-  const ticketMessages = getTicketMessages(language);
-  return new EmbedBuilder()
-    .setTitle(ticketMessages.closeTitle)
-    .setColor(0x747f8d)
-    .setDescription(
-      formatMessage(ticketMessages.closeDescription, {
-        closedBy,
-      })
-    )
-    .setTimestamp();
-}
-
-function buildTicketAutoClosedEmbed(language) {
-  const ticketMessages = getTicketMessages(language);
-  return new EmbedBuilder()
-    .setTitle(ticketMessages.autoCloseTitle)
-    .setColor(0x747f8d)
-    .setDescription(ticketMessages.autoCloseDescription)
-    .setTimestamp();
-}
-
-function buildCloseButtonRow(language) {
-  const ticketMessages = getTicketMessages(language);
-  return new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId('ticket_close')
-      .setLabel(ticketMessages.closeButton)
-      .setStyle(ButtonStyle.Danger)
-  );
-}
-
-function buildOpenButtonRow() {
-  const ticketMessagesRu = getTicketMessages('ru');
-  const ticketMessagesEn = getTicketMessages('en');
-  return new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId('ticket_create_ru')
-      .setLabel(ticketMessagesRu.createButtonRu)
-      .setStyle(ButtonStyle.Primary),
-    new ButtonBuilder()
-      .setCustomId('ticket_create_en')
-      .setLabel(ticketMessagesEn.createButtonEn)
-      .setStyle(ButtonStyle.Secondary)
-  );
-}
-
-function buildTicketCreateModal(language, steam64) {
-  const ticketMessages = getTicketMessages(language);
-  const steamInput = new TextInputBuilder()
-    .setCustomId('ticket_steam64')
-    .setLabel(ticketMessages.modalSteamLabel)
-    .setPlaceholder(ticketMessages.modalSteamPlaceholder)
-    .setStyle(TextInputStyle.Short)
-    .setRequired(true)
-    .setMinLength(17)
-    .setMaxLength(17);
-  if (steam64) {
-    steamInput.setValue(steam64);
-  }
-  return new ModalBuilder()
-    .setCustomId(`ticket_create_modal_${language}`)
-    .setTitle(ticketMessages.modalTitle)
-    .addComponents(new ActionRowBuilder().addComponents(steamInput));
-}
-
-async function showTicketCreateModal(interaction, forcedLanguage = null) {
-  const fallbackLanguage = resolveUserLanguage(interaction.user.id, interaction.guild?.preferredLocale);
-  const language = forcedLanguage
-    ? normalizeLanguage(forcedLanguage, fallbackLanguage)
-    : fallbackLanguage;
-  const linkedSteam = getLinkedSteamId(interaction.user.id);
-  if (linkedSteam) {
-    await handleTicketCreate(interaction, language);
-    return;
-  }
-  const modal = buildTicketCreateModal(language, linkedSteam);
-  await interaction.showModal(modal);
-}
-
-async function saveSteamLinkFromTicketModal(interaction, steam64, language) {
-  const messages = getMessagesForLanguage(language);
-  let outcome = 'unchanged';
-  let deniedMessage = '';
-  await enqueueOperation(async () => {
-    const discordId = interaction.user.id;
-    const existingLink = getLinkedSteamId(discordId);
-    if (existingLink && existingLink !== steam64) {
-      deniedMessage = messages.steamidAlreadyLinked;
-      outcome = 'denied';
-      await logAction('link_update_denied', {
-        serverName: primaryServer.name,
-        discordId,
-        steam64,
-        roleName: null,
-        expiresAt: null,
-        note: 'ticket_modal_existing_link',
-      });
-      return;
-    }
-
-    const existingOwner = findDiscordIdBySteam(steam64);
-    if (existingOwner && existingOwner !== discordId) {
-      deniedMessage = messages.steamidOwned;
-      outcome = 'denied';
-      await logAction('link_update_denied', {
-        serverName: primaryServer.name,
-        discordId,
-        steam64,
-        roleName: null,
-        expiresAt: null,
-        note: `ticket_modal_owned_by=${existingOwner}`,
-      });
-      return;
-    }
-
-    if (existingLink === steam64) {
-      outcome = 'unchanged';
-      return;
-    }
-
-    db.links[discordId] = steam64;
-    invalidLinks.delete(discordId);
-    addHistory('link_set', {
-      discordId,
-      steam64,
-      roleName: null,
-      expiresAt: null,
-      note: 'ticket_modal',
-    });
-    await savePrimaryDb();
-    outcome = 'saved';
-    await logAction('link_set', {
-      serverName: primaryServer.name,
-      discordId,
-      steam64,
-      roleName: null,
-      expiresAt: null,
-      note: 'ticket_modal',
-    });
-  });
-
-  if (outcome === 'denied') {
-    return { ok: false, message: deniedMessage };
-  }
-
-  if (outcome === 'saved') {
-    try {
-      const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
-      if (member) {
-        await assignMemberRole(member);
-      }
-    } catch (err) {
-      // Do not fail ticket creation when role assignment fails.
-    }
-  }
-
-  return { ok: true };
-}
-
-async function handleTicketCreateModalSubmit(interaction) {
-  const forcedLanguage = interaction.customId.endsWith('_en') ? 'en' : 'ru';
-  const fallbackLanguage = resolveUserLanguage(interaction.user.id, interaction.guild?.preferredLocale);
-  const language = normalizeLanguage(forcedLanguage, fallbackLanguage);
-  const messages = getMessagesForLanguage(language);
-  const steam64 = normalizeSteamId64(interaction.fields.getTextInputValue('ticket_steam64'));
-  if (!isValidSteamId64(steam64)) {
-    await interaction.reply({
-      content: messages.invalidSteamId,
-      ephemeral: true,
-    });
-    return;
-  }
-
-  const saveResult = await saveSteamLinkFromTicketModal(interaction, steam64, language);
-  if (!saveResult.ok) {
-    await interaction.reply({
-      content: saveResult.message || messages.genericError,
-      ephemeral: true,
-    });
-    return;
-  }
-
-  await handleTicketCreate(interaction, language);
-}
-
-function getVipStatusLabel(steam64, language) {
-  const ticketMessages = getTicketMessages(language);
-  if (!steam64 || !db) {
-    return ticketMessages.noVip;
-  }
-  const steamKey = String(steam64);
-  const now = unixNow();
-  const inWhitelist = db.whiteList?.vip?.includes(steamKey);
-  if (!inWhitelist) {
-    return ticketMessages.noVip;
-  }
-  const timedRecord = db.vipTimed?.[steamKey];
-  if (!timedRecord) {
-    return ticketMessages.vipForever;
-  }
-  const expiresAt = Number(timedRecord.expiresAt) || 0;
-  if (expiresAt === 0) {
-    return ticketMessages.vipForever;
-  }
-  if (expiresAt < now) {
-    return ticketMessages.vipExpired;
-  }
-  return formatMessage(ticketMessages.vipUntil, { expiresAt });
-}
-
-function getTariffLabelForSteam(steam64, language) {
-  if (!steam64 || !db) {
-    return null;
-  }
-  const steamKey = String(steam64);
-  const timedRecord = db.vipTimed?.[steamKey];
-  const roleName = timedRecord?.roleName;
-  if (!roleName) {
-    return null;
-  }
-  return formatTariffDisplay(roleName, language);
-}
-
-function buildSafeChannelName(username) {
-  const normalized = String(username || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 24);
-  return `ticket-${normalized || 'user'}`;
-}
-
-function getTicketRecordForUser(discordId) {
-  if (!db?.tickets || !discordId) {
-    return null;
-  }
-  for (const [channelId, ticket] of Object.entries(db.tickets)) {
-    if (ticket?.discordId === discordId && !ticket?.closedAt) {
-      return { channelId, ticket };
-    }
-  }
-  return null;
-}
-
-async function handleTicketCreate(interaction, forcedLanguage = null) {
-  if (!interaction.inGuild()) {
-    return;
-  }
-
-  const fallbackLanguage = resolveUserLanguage(interaction.user.id, interaction.guild?.preferredLocale);
-  const language = forcedLanguage
-    ? normalizeLanguage(forcedLanguage, fallbackLanguage)
-    : fallbackLanguage;
-  rememberUserLanguage(interaction.user.id, language);
-  const ticketMessages = getTicketMessages(language);
-  const ticketConfig = getTicketConfig();
-  if (!ticketConfig.categoryId) {
-    await interaction.reply({
-      content: ticketMessages.missingConfig,
-      ephemeral: true,
-    });
-    return;
-  }
-
-  const existingTicket = getTicketRecordForUser(interaction.user.id);
-  if (existingTicket) {
-    await interaction.reply({
-      content: formatMessage(ticketMessages.ticketAlreadyExists, {
-        channelId: existingTicket.channelId,
-      }),
-      ephemeral: true,
-    });
-    return;
-  }
-
-  await interaction.deferReply({ ephemeral: true });
-
-  const guild = interaction.guild;
-  const discordId = interaction.user.id;
-  const steam64 = getLinkedSteamId(discordId);
-  const permissionOverwrites = [
-    {
-      id: guild.roles.everyone.id,
-      deny: [PermissionFlagsBits.ViewChannel],
-    },
-    {
-      id: discordId,
-      allow: [
-        PermissionFlagsBits.ViewChannel,
-        PermissionFlagsBits.SendMessages,
-        PermissionFlagsBits.ReadMessageHistory,
-        PermissionFlagsBits.AttachFiles,
-      ],
-    },
-  ];
-
-  if (ticketConfig.supportRoleId) {
-    permissionOverwrites.push({
-      id: ticketConfig.supportRoleId,
-      allow: [
-        PermissionFlagsBits.ViewChannel,
-        PermissionFlagsBits.SendMessages,
-        PermissionFlagsBits.ReadMessageHistory,
-        PermissionFlagsBits.ManageChannels,
-      ],
-    });
-  }
-
-  let channel;
-  try {
-    channel = await guild.channels.create({
-      name: buildSafeChannelName(interaction.user.username),
-      type: ChannelType.GuildText,
-      parent: ticketConfig.categoryId,
-      permissionOverwrites,
-      reason: `Ticket by ${interaction.user.tag}`,
-    });
-  } catch (err) {
-    console.error('[tickets] Failed to create channel:', err?.message || err);
-    await interaction.editReply({ content: ticketMessages.ticketCreateFailed });
-    return;
-  }
-
-  if (!db.tickets || typeof db.tickets !== 'object') {
-    db.tickets = {};
-  }
-  db.tickets[channel.id] = {
-    discordId,
-    steam64: steam64 || null,
-    openedAt: unixNow(),
-    language,
-    firstUserMessageAt: null,
-    supportNotifiedAt: null,
-  };
-  await enqueueBotDbSave(extractMetaPayload(db));
-
-  const ticketEmbed = buildTicketOpenEmbed(interaction.user, steam64, language);
-  const closeRow = buildCloseButtonRow(language);
-
-  await channel.send({
-    content: `<@${discordId}>`,
-    allowedMentions: {
-      users: [discordId],
-    },
-    embeds: [ticketEmbed],
-    components: [closeRow],
-  });
-
-  await interaction.editReply({
-    content: formatMessage(ticketMessages.ticketCreated, {
-      channelId: channel.id,
-    }),
-  });
-
-  await logAction('ticket_open', {
-    serverName: primaryServer.name,
-    discordId,
-    steam64: steam64 || null,
-    roleName: null,
-    expiresAt: null,
-    note: `channel=${channel.id}`,
-  });
-}
-
-async function closeTicketChannel(channel, ticketRecord, options = {}) {
-  if (!ticketRecord || ticketRecord.closedAt) {
-    return;
-  }
-
-  const reason = String(options.reason || 'manual');
-  const closedBy = String(options.closedBy || client.user?.id || 'system');
-  const guildLocale = channel?.guild?.preferredLocale || primaryGuild?.preferredLocale;
-  const ticketLanguage = normalizeLanguage(
-    ticketRecord.language,
-    resolveUserLanguage(ticketRecord.discordId, guildLocale)
-  );
-  const ticketConfig = getTicketConfig();
-  ticketRecord.closedAt = unixNow();
-  ticketRecord.closedBy = closedBy;
-  ticketRecord.closeReason = reason;
-  await enqueueBotDbSave(extractMetaPayload(db));
-
-  if (channel && channel.isTextBased()) {
-    try {
-      const closeEmbed = reason === 'inactive_timeout'
-        ? buildTicketAutoClosedEmbed(ticketLanguage)
-        : buildTicketClosedEmbed(closedBy, ticketLanguage);
-      await channel.send({
-        embeds: [closeEmbed],
-      });
-    } catch (err) {
-      console.warn('[tickets] Failed to send close message:', err?.message || err);
-    }
-
-    try {
-      await channel.permissionOverwrites.edit(ticketRecord.discordId, {
-        ViewChannel: false,
-        SendMessages: false,
-        ReadMessageHistory: false,
-      });
-    } catch (err) {
-      console.warn('[tickets] Failed to revoke ticket owner write access:', err?.message || err);
-    }
-
-    const archiveCategoryId = ticketConfig.archiveCategoryId || ticketConfig.categoryId;
-    if (archiveCategoryId && archiveCategoryId !== channel.parentId) {
-      try {
-        await channel.setParent(archiveCategoryId, {
-          lockPermissions: false,
-          reason: 'Ticket archived',
-        });
-      } catch (err) {
-        console.warn('[tickets] Failed to move ticket to archive category:', err?.message || err);
-      }
-    }
-
-    try {
-      const baseName = String(channel.name || '').replace(/^(closed-)+/, '');
-      await channel.setName(`closed-${baseName}`, 'Ticket closed');
-    } catch (err) {
-      console.warn('[tickets] Failed to rename ticket channel:', err?.message || err);
-    }
-  }
-
-  await logAction('ticket_close', {
-    serverName: primaryServer.name,
-    discordId: ticketRecord.discordId || null,
-    steam64: ticketRecord.steam64 || null,
-    roleName: null,
-    expiresAt: null,
-    note: `channel=${channel?.id || '-'} by=${closedBy} reason=${reason}`,
-  });
-}
-
-async function handleTicketClose(interaction) {
-  if (!interaction.inGuild()) {
-    return;
-  }
-
-  const ticketMessages = getTicketMessages(
-    resolveUserLanguage(interaction.user.id, interaction.guild?.preferredLocale)
-  );
-  const channel = interaction.channel;
-  const ticketRecord = db.tickets?.[channel?.id];
-  if (!ticketRecord) {
-    await interaction.reply({
-      content: ticketMessages.notTicketChannel,
-      ephemeral: true,
-    });
-    return;
-  }
-
-  await interaction.deferReply({ ephemeral: true });
-  await closeTicketChannel(channel, ticketRecord, {
-    reason: 'manual',
-    closedBy: interaction.user.id,
-  });
-
-  await interaction.editReply({
-    content: ticketMessages.ticketClosed,
-  });
-}
-
-async function handleTicketPanelCommand(interaction, language) {
-  const ticketMessages = getTicketMessages(language);
-  if (!hasManageRoles(interaction)) {
-    await interaction.reply({
-      content: ticketMessages.noPermPanel,
-      ephemeral: true,
-    });
-    return;
-  }
-
-  const ticketConfig = getTicketConfig();
-  let targetChannel = interaction.channel;
-  if (ticketConfig.panelChannelId) {
-    const configuredChannel = await interaction.guild.channels
-      .fetch(ticketConfig.panelChannelId)
-      .catch(() => null);
-    if (configuredChannel?.isTextBased()) {
-      targetChannel = configuredChannel;
-    }
-  }
-
-  const panelEmbed = buildTicketPanelEmbed(language);
-  const openRow = buildOpenButtonRow();
-
-  try {
-    await targetChannel.send({
-      embeds: [panelEmbed],
-      components: [openRow],
-    });
-  } catch (err) {
-    await interaction.reply({
-      content: ticketMessages.panelPostFailed,
-      ephemeral: true,
-    });
-    return;
-  }
-
-  await interaction.reply({
-    content: formatMessage(ticketMessages.panelPosted, {
-      channelId: targetChannel.id,
-    }),
-    ephemeral: true,
-  });
-
-  await logAction('ticket_panel', {
-    serverName: primaryServer.name,
-    discordId: interaction.user.id,
-    steam64: null,
-    roleName: null,
-    expiresAt: null,
-    note: `channel=${targetChannel.id}`,
-  });
-}
-
-async function handleTicketDeleteCommand(interaction, language) {
-  const ticketMessages = getTicketMessages(language);
-  if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
-    await interaction.reply({
-      content: ticketMessages.noPermDelete,
-      ephemeral: true,
-    });
-    return;
-  }
-
-  const channel = interaction.channel;
-  const channelId = channel?.id;
-  const ticketRecord = channelId ? db.tickets?.[channelId] : null;
-  if (!ticketRecord) {
-    await interaction.reply({
-      content: ticketMessages.notTicketChannel,
-      ephemeral: true,
-    });
-    return;
-  }
-
-  await interaction.deferReply({ ephemeral: true });
-
-  try {
-    await channel.delete(`Ticket deleted by ${interaction.user.tag}`);
-  } catch (err) {
-    console.error('[tickets] Failed to delete ticket channel:', err?.message || err);
-    await interaction.editReply({
-      content: ticketMessages.ticketDeleteFailed,
-    });
-    return;
-  }
-
-  if (db.tickets && db.tickets[channelId]) {
-    delete db.tickets[channelId];
-    await enqueueBotDbSave(extractMetaPayload(db));
-  }
-
-  await logAction('ticket_delete', {
-    serverName: primaryServer.name,
-    discordId: ticketRecord.discordId || null,
-    steam64: ticketRecord.steam64 || null,
-    roleName: null,
-    expiresAt: null,
-    note: `channel=${channelId} by=${interaction.user.id}`,
-  });
-
-  try {
-    await interaction.editReply({
-      content: ticketMessages.ticketDeleted,
-    });
-  } catch (err) {
-    // Channel is removed; ignore failed ephemeral update.
-  }
-}
-
-async function handleTicketOwnerFirstMessage(message) {
-  if (!db || !message.inGuild() || !message.channelId || message.author?.bot) {
-    return;
-  }
-
-  const ticketRecord = db.tickets?.[message.channelId];
-  if (!ticketRecord || ticketRecord.closedAt) {
-    return;
-  }
-  if (String(ticketRecord.discordId) !== String(message.author.id)) {
-    return;
-  }
-
-  const now = unixNow();
-  let changed = false;
-  if (!ticketRecord.firstUserMessageAt) {
-    ticketRecord.firstUserMessageAt = now;
-    changed = true;
-  }
-
-  const ticketConfig = getTicketConfig();
-  if (ticketConfig.supportRoleId && !ticketRecord.supportNotifiedAt) {
-    try {
-      await message.channel.send({
-        content: `<@&${ticketConfig.supportRoleId}>`,
-        allowedMentions: {
-          roles: [ticketConfig.supportRoleId],
-        },
-      });
-      ticketRecord.supportNotifiedAt = now;
-      changed = true;
-    } catch (err) {
-      console.warn('[tickets] Failed to notify support role:', err?.message || err);
-    }
-  }
-
-  if (changed) {
-    await enqueueBotDbSave(extractMetaPayload(db));
-  }
-}
-
-async function runTicketInactivityCheck() {
-  if (!db) {
-    return;
-  }
-
-  const now = unixNow();
-  const staleChannelIds = [];
-  for (const [channelId, ticketRecord] of Object.entries(db.tickets || {})) {
-    if (!ticketRecord || ticketRecord.closedAt) {
-      continue;
-    }
-    if (ticketRecord.firstUserMessageAt) {
-      continue;
-    }
-    const openedAt = Number(ticketRecord.openedAt) || 0;
-    if (!openedAt) {
-      continue;
-    }
-    if (now - openedAt >= TICKET_IDLE_CLOSE_SECONDS) {
-      staleChannelIds.push(channelId);
-    }
-  }
-
-  for (const channelId of staleChannelIds) {
-    const ticketRecord = db.tickets?.[channelId];
-    if (!ticketRecord || ticketRecord.closedAt || ticketRecord.firstUserMessageAt) {
-      continue;
-    }
-
-    const channel = await client.channels.fetch(channelId).catch(() => null);
-    if (!channel || !channel.isTextBased()) {
-      ticketRecord.closedAt = now;
-      ticketRecord.closedBy = String(client.user?.id || 'system');
-      ticketRecord.closeReason = 'inactive_timeout_missing_channel';
-      await enqueueBotDbSave(extractMetaPayload(db));
-      await logAction('ticket_close', {
-        serverName: primaryServer.name,
-        discordId: ticketRecord.discordId || null,
-        steam64: ticketRecord.steam64 || null,
-        roleName: null,
-        expiresAt: null,
-        note: `channel=${channelId} by=system reason=inactive_timeout_missing_channel`,
-      });
-      continue;
-    }
-
-    await closeTicketChannel(channel, ticketRecord, {
-      reason: 'inactive_timeout',
-      closedBy: String(client.user?.id || 'system'),
-    });
-  }
 }
 
 async function handleEveryoneProtection(message) {
@@ -4037,7 +2739,7 @@ async function initializeLeaderboardModule() {
 
   let LeaderboardGenerator;
   try {
-    LeaderboardGenerator = require('../leaderboard/leaderboard-generator');
+    LeaderboardGenerator = require('../modules/leaderboard/leaderboard-generator');
   } catch (err) {
     console.warn('[leaderboard] Failed to load module:', err?.message || err);
     console.warn('[leaderboard] Install missing deps and restart.');
@@ -4289,624 +2991,6 @@ async function handleLeaderboardInteraction(interaction) {
 }
 
 
-const CFTOOLS_SERVERS = [
-  { key: 's1', name: 'SWAGA 20MM', id: '00ebc10b-efbe-437a-bf0f-7fde12ee53ff' },
-  { key: 's2', name: 'SWAGA .338', id: '91dccd12-97de-4340-b23b-dde8a2f64e44' },
-  { key: 's3', name: 'SWAGA VANILLA', id: 'af7eebde-c26e-4ece-a0b6-31daebab5080' },
-];
-
-async function getCftoolsToken() {
-  const appId = config.leaderboard?.cfCloudApplicationId || config.cfCloudApplicationId || '';
-  const appSecret = config.leaderboard?.cfCloudApplicationSecret || config.cfCloudApplicationSecret || '';
-  if (!appId || !appSecret) return null;
-  try {
-    const resp = await fetch('https://data.cftools.cloud/v1/auth/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ application_id: appId, secret: appSecret }),
-    });
-    const data = await resp.json();
-    return data.token || null;
-  } catch { return null; }
-}
-
-async function getOnlinePlayers(serverIds) {
-  const token = await getCftoolsToken();
-  if (!token) return null;
-  const players = [];
-  for (const sid of serverIds) {
-    try {
-      const resp = await fetch(`https://data.cftools.cloud/v1/server/${sid}/GSM/list`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await resp.json();
-      console.log('[cftools] sessions sample:', JSON.stringify(data.sessions?.[0], null, 2));
-      if (data.sessions && Array.isArray(data.sessions)) {
-        for (const s of data.sessions) {
-          const name = s.gamedata?.player_name || s.persona?.profile?.name || s['cftools_id'] || 'Unknown';
-          const steam64 = s.gamedata?.steam64 || null;
-          players.push({ name, steam64, serverId: sid });
-        }
-      }
-    } catch { /* skip failed server */ }
-  }
-  return players;
-}
-
-function getGiveawayPrizeOption(prizeValue) {
-  return GIVEAWAY_PRIZE_OPTIONS.find((entry) => entry.value === String(prizeValue || '')) || null;
-}
-
-async function grantGiveawayRole(discordId, note) {
-  const member = await fetchGuildMember(discordId);
-  if (!member) {
-    return { assigned: false, reason: 'member_not_found' };
-  }
-  const role = member.guild.roles.cache.find((entry) => entry.name === GIVEAWAY_VIP_ROLE_NAME);
-  if (!role) {
-    return { assigned: false, reason: 'role_not_found' };
-  }
-  if (!role.editable) {
-    return { assigned: false, reason: 'role_not_editable' };
-  }
-  if (member.roles.cache.has(role.id)) {
-    return { assigned: false, reason: 'already_has_role' };
-  }
-  await member.roles.add(role, note);
-  return { assigned: true, reason: 'assigned' };
-}
-
-async function grantGiveawayRewardToWinners(giveaway, reason) {
-  if (!giveaway || giveaway.ended !== true || !Array.isArray(giveaway.winners)) {
-    return { granted: 0, skipped: 0, skippedAlreadyVip: 0, skippedNoLink: 0, alreadyVipWinners: [] };
-  }
-  const reward = getGiveawayPrizeOption(giveaway.prizeValue);
-  if (!reward) {
-    return {
-      granted: 0,
-      skipped: giveaway.winners.length,
-      skippedAlreadyVip: 0,
-      skippedNoLink: 0,
-      alreadyVipWinners: [],
-    };
-  }
-  if (!(giveaway.rewardedWinnerIds instanceof Set)) {
-    giveaway.rewardedWinnerIds = new Set(
-      Array.isArray(giveaway.rewardedWinnerIds) ? giveaway.rewardedWinnerIds : []
-    );
-  }
-
-  const now = unixNow();
-  const grantedEntries = [];
-  let dbChanged = false;
-  let skipped = 0;
-  let skippedAlreadyVip = 0;
-  let skippedNoLink = 0;
-  const alreadyVipWinners = [];
-
-  for (const winnerId of giveaway.winners) {
-    const discordId = String(winnerId || '');
-    if (!discordId || giveaway.rewardedWinnerIds.has(discordId)) {
-      skipped += 1;
-      continue;
-    }
-
-    const steam64 = getLinkedSteamId(discordId);
-    if (!steam64) {
-      skipped += 1;
-      skippedNoLink += 1;
-      await logAction('giveaway_reward_skip', {
-        serverName: primaryServer.name,
-        discordId,
-        steam64: null,
-        roleName: GIVEAWAY_VIP_ROLE_NAME,
-        expiresAt: null,
-        note: 'steam64_not_linked',
-      });
-      continue;
-    }
-
-    const steamKey = String(steam64);
-    if (db.whiteList.vip.includes(steamKey)) {
-      skipped += 1;
-      skippedAlreadyVip += 1;
-      alreadyVipWinners.push(discordId);
-      giveaway.rewardedWinnerIds.add(discordId);
-      await logAction('giveaway_reward_skip', {
-        serverName: primaryServer.name,
-        discordId,
-        steam64: steamKey,
-        roleName: GIVEAWAY_VIP_ROLE_NAME,
-        expiresAt: null,
-        note: 'already_has_vip',
-      });
-      continue;
-    }
-    ensureVip(steamKey);
-    dbChanged = true;
-
-    let expiresAt = 0;
-    if (reward.durationSeconds === null) {
-      if (db.vipTimed[steamKey]) {
-        delete db.vipTimed[steamKey];
-        dbChanged = true;
-      }
-    } else {
-      expiresAt = now + reward.durationSeconds;
-      db.vipTimed[steamKey] = {
-        issuedAt: now,
-        expiresAt,
-        roleName: GIVEAWAY_VIP_ROLE_NAME,
-        source: 'giveaway',
-        reason,
-      };
-      dbChanged = true;
-    }
-
-    addHistory('giveaway_reward', {
-      discordId,
-      steam64: steamKey,
-      roleName: GIVEAWAY_VIP_ROLE_NAME,
-      expiresAt,
-      note: reward.label,
-    });
-
-    giveaway.rewardedWinnerIds.add(discordId);
-    grantedEntries.push({ discordId, steam64: steamKey, expiresAt });
-  }
-
-  if (dbChanged) {
-    await persistAndSync();
-  }
-
-  for (const entry of grantedEntries) {
-    const roleResult = await grantGiveawayRole(
-      entry.discordId,
-      `Giveaway reward: ${reward.label}`
-    ).catch((err) => ({ assigned: false, reason: err.message || 'role_assign_failed' }));
-    const language = resolveUserLanguage(entry.discordId, primaryGuild?.preferredLocale);
-    await sendDmToUserId(entry.discordId, {
-      embeds: [buildVipEmbed(GIVEAWAY_VIP_ROLE_NAME, entry.expiresAt > 0 ? entry.expiresAt : null, language)],
-    });
-    await logAction('giveaway_reward', {
-      serverName: primaryServer.name,
-      discordId: entry.discordId,
-      steam64: entry.steam64,
-      roleName: GIVEAWAY_VIP_ROLE_NAME,
-      expiresAt: entry.expiresAt,
-      note: `${reward.label}; role=${roleResult.reason}`,
-    });
-  }
-
-  return {
-    granted: grantedEntries.length,
-    skipped,
-    skippedAlreadyVip,
-    skippedNoLink,
-    alreadyVipWinners,
-  };
-}
-
-function buildGiveawayEmbed(giveaway, ended = false) {
-  const endsAt = Math.floor(giveaway.endsAt / 1000);
-  const desc = ended
-    ? `🎉 **Розыгрыш завершён!**\n\n🏆 Победитель${giveaway.winners.length > 1 ? 'и' : ''}: ${giveaway.winners.length ? giveaway.winners.map((w) => `<@${w}>`).join(', ') : 'нет участников'}`
-    : `👥 Участников: **${giveaway.participants.size}**\n⏰ Заканчивается: <t:${endsAt}:R>`;
-  return new EmbedBuilder()
-    .setTitle(`🎁 ${giveaway.prize}`)
-    .setDescription(desc)
-    .setColor(ended ? 0x5865f2 : 0x7c3aed)
-    .setFooter({ text: ended ? `Победителей: ${giveaway.winnersCount}` : `Победителей: ${giveaway.winnersCount} · ID: ${giveaway.messageId || '...'}` });
-}
-
-function buildJoinButton(giveawayId) {
-  return new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`giveaway_join:${giveawayId}`)
-      .setLabel('Участвовать 🎉')
-      .setStyle(ButtonStyle.Primary)
-  );
-}
-
-function buildSteamModal(giveawayId) {
-  const modal = new ModalBuilder()
-    .setCustomId(`giveaway_steam_modal:${giveawayId}`)
-    .setTitle('Привязка Steam для участия');
-  modal.addComponents(
-    new ActionRowBuilder().addComponents(
-      new TextInputBuilder()
-        .setCustomId('steamid_input')
-        .setLabel('Твой SteamID64 (17 цифр)')
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder('76561198000000000')
-        .setRequired(true)
-    )
-  );
-  return modal;
-}
-
-function pickWinners(participants, count) {
-  const arr = Array.from(participants);
-  const winners = [];
-  while (winners.length < count && arr.length > 0) {
-    const idx = Math.floor(Math.random() * arr.length);
-    winners.push(arr.splice(idx, 1)[0]);
-  }
-  return winners;
-}
-
-function escapeMarkdownLinkText(value) {
-  return String(value || '')
-    .replace(/\\/g, '\\\\')
-    .replace(/\[/g, '\\[')
-    .replace(/\]/g, '\\]');
-}
-
-function formatOnlineGiveawayWinnerLine(winner) {
-  if (!winner || typeof winner !== 'object') {
-    return '🏆 **Победитель:** Unknown';
-  }
-  const winnerName = winner.name ? String(winner.name) : 'Unknown';
-  const steam64 = winner.steam64 ? normalizeSteamId64(winner.steam64) : null;
-  const hasValidSteam = steam64 && isValidSteamId64(steam64);
-  const winnerLabel = hasValidSteam
-    ? `[${escapeMarkdownLinkText(winnerName)}](${buildCfToolsProfileUrl(steam64)})`
-    : `**${winnerName}**`;
-  const linkedDiscordId = hasValidSteam ? findDiscordIdBySteam(steam64) : null;
-  const discordLine = linkedDiscordId ? `\n🔗 Discord: <@${linkedDiscordId}>` : '';
-  return `🏆 **Победитель:** ${winnerLabel}${discordLine}`;
-}
-
-async function grantServerGiveawayWinnerReward(winner, reward, reason) {
-  if (!winner || !reward) {
-    return { granted: false, reason: 'invalid_payload' };
-  }
-  const steam64 = winner.steam64 ? normalizeSteamId64(winner.steam64) : null;
-  if (!steam64 || !isValidSteamId64(steam64)) {
-    return { granted: false, reason: 'steam64_missing' };
-  }
-
-  const steamKey = String(steam64);
-  const discordId = findDiscordIdBySteam(steamKey);
-  if (db.whiteList.vip.includes(steamKey)) {
-    await logAction('giveaway_reward_skip', {
-      serverName: primaryServer.name,
-      discordId: discordId || null,
-      steam64: steamKey,
-      roleName: GIVEAWAY_VIP_ROLE_NAME,
-      expiresAt: null,
-      note: 'already_has_vip',
-    });
-    return {
-      granted: false,
-      reason: 'already_has_vip',
-      steam64: steamKey,
-      discordId: discordId || null,
-    };
-  }
-
-  const now = unixNow();
-  let expiresAt = 0;
-  let dbChanged = false;
-  ensureVip(steamKey);
-  dbChanged = true;
-
-  if (reward.durationSeconds === null) {
-    if (db.vipTimed[steamKey]) {
-      delete db.vipTimed[steamKey];
-      dbChanged = true;
-    }
-  } else {
-    expiresAt = now + reward.durationSeconds;
-    db.vipTimed[steamKey] = {
-      issuedAt: now,
-      expiresAt,
-      roleName: GIVEAWAY_VIP_ROLE_NAME,
-      source: 'giveaway_server',
-      reason,
-    };
-    dbChanged = true;
-  }
-
-  addHistory('giveaway_reward', {
-    discordId: discordId || null,
-    steam64: steamKey,
-    roleName: GIVEAWAY_VIP_ROLE_NAME,
-    expiresAt,
-    note: reward.label,
-  });
-
-  if (dbChanged) {
-    await persistAndSync();
-  }
-
-  let roleReason = 'no_discord_link';
-  if (discordId) {
-    const roleResult = await grantGiveawayRole(
-      discordId,
-      `Giveaway reward: ${reward.label}`
-    ).catch((err) => ({ assigned: false, reason: err.message || 'role_assign_failed' }));
-    roleReason = roleResult.reason || (roleResult.assigned ? 'assigned' : 'unknown');
-
-    const language = resolveUserLanguage(discordId, primaryGuild?.preferredLocale);
-    await sendDmToUserId(discordId, {
-      embeds: [
-        buildVipEmbed(
-          GIVEAWAY_VIP_ROLE_NAME,
-          expiresAt > 0 ? expiresAt : null,
-          language
-        ),
-      ],
-    });
-  }
-
-  await logAction('giveaway_reward', {
-    serverName: primaryServer.name,
-    discordId: discordId || null,
-    steam64: steamKey,
-    roleName: GIVEAWAY_VIP_ROLE_NAME,
-    expiresAt,
-    note: `${reward.label}; source=server; role=${roleReason}`,
-  });
-
-  return {
-    granted: true,
-    steam64: steamKey,
-    discordId: discordId || null,
-    expiresAt,
-    roleReason,
-  };
-}
-
-async function endGiveaway(giveawayId) {
-  const giveaway = giveaways.get(giveawayId);
-  if (!giveaway || giveaway.ended) return;
-  giveaway.ended = true;
-  giveaway.winners = pickWinners(giveaway.participants, giveaway.winnersCount);
-  try {
-    const channel = await client.channels.fetch(giveaway.channelId).catch(() => null);
-    if (!channel) return;
-    const msg = await channel.messages.fetch(giveaway.messageId).catch(() => null);
-    if (msg) {
-      await msg.edit({ embeds: [buildGiveawayEmbed(giveaway, true)], components: [] });
-    }
-    const mention = giveaway.winners.length
-      ? `🎉 Поздравляем ${giveaway.winners.map((w) => `<@${w}>`).join(', ')}! Вы выиграли **${giveaway.prize}**!`
-      : '😔 Никто не участвовал в розыгрыше.';
-    await channel.send({ content: mention });
-    const rewardResult = await grantGiveawayRewardToWinners(giveaway, 'auto_end');
-    if (rewardResult?.skippedAlreadyVip > 0 && Array.isArray(rewardResult.alreadyVipWinners)) {
-      const winnerMentions = rewardResult.alreadyVipWinners.map((id) => `<@${id}>`).join(', ');
-      await channel
-        .send({
-          content:
-            `ℹ️ ${winnerMentions} уже имеют активный VIP, поэтому приз им не выдан.`,
-        })
-        .catch(() => {});
-    }
-  } catch (err) {
-    console.error('[giveaway] end error:', err);
-  }
-}
-
-async function handleGiveawayCommand(interaction) {
-  const sub = interaction.options.getSubcommand();
-
-  if (sub === 'create') {
-    const prizeValue = interaction.options.getString('prize', true);
-    const reward = getGiveawayPrizeOption(prizeValue);
-    if (!reward) {
-      await interaction.reply({ content: '❌ Неверный тип приза.', ephemeral: true });
-      return;
-    }
-    const prize = reward.label;
-    const duration = interaction.options.getInteger('duration', true);
-    const winnersCount = interaction.options.getInteger('winners') || 1;
-    const endsAt = Date.now() + duration * 60 * 1000;
-    const giveawayId = `${interaction.id}`;
-
-    const giveaway = {
-      id: giveawayId,
-      prize,
-      prizeValue: reward.value,
-      endsAt,
-      winnersCount,
-      participants: new Set(),
-      winners: [],
-      rewardedWinnerIds: new Set(),
-      ended: false,
-      channelId: interaction.channelId,
-      messageId: null,
-    };
-    giveaways.set(giveawayId, giveaway);
-
-    await interaction.deferReply({ ephemeral: true });
-    const embed = buildGiveawayEmbed(giveaway);
-    const row = buildJoinButton(giveawayId);
-    const msg = await interaction.channel.send({ embeds: [embed], components: [row] });
-    giveaway.messageId = msg.id;
-
-    setTimeout(() => endGiveaway(giveawayId), duration * 60 * 1000);
-    await interaction.editReply({ content: `✅ Розыгрыш создан! [Перейти](https://discord.com/channels/${interaction.guildId}/${interaction.channelId}/${msg.id})` });
-    return;
-  }
-
-  if (sub === 'server') {
-    await interaction.deferReply({ ephemeral: true });
-    const serverKey = interaction.options.getString('server') || 'all';
-    const prizeValue = interaction.options.getString('prize', true);
-    const reward = getGiveawayPrizeOption(prizeValue);
-    if (!reward) {
-      await interaction.editReply({ content: '❌ Неверный тип приза.' });
-      return;
-    }
-    const durationMinutes = interaction.options.getInteger('duration', true);
-    const serverIds = serverKey === 'all'
-      ? CFTOOLS_SERVERS.map((s) => s.id)
-      : [CFTOOLS_SERVERS.find((s) => s.key === serverKey)?.id].filter(Boolean);
-    if (!serverIds.length) {
-      await interaction.editReply({ content: '❌ Сервер не найден.' });
-      return;
-    }
-
-    const serverName = serverKey === 'all'
-      ? 'всех серверов'
-      : CFTOOLS_SERVERS.find((s) => s.key === serverKey)?.name || serverKey;
-    const endAtMs = Date.now() + durationMinutes * 60 * 1000;
-    const endAtUnix = Math.floor(endAtMs / 1000);
-
-    if (!interaction.channel || !interaction.channel.isTextBased()) {
-      await interaction.editReply({ content: '❌ Этот канал не поддерживает отправку сообщений.' });
-      return;
-    }
-
-    const launchEmbed = new EmbedBuilder()
-      .setTitle('🎁 Розыгрыш среди игроков онлайн')
-      .setDescription(
-        `**Приз:** ${reward.label}\n**Сервер:** ${serverName}\n⏰ Заканчивается: <t:${endAtUnix}:R>\n\n` +
-        'Победитель будет выбран случайно среди игроков онлайн в момент завершения.'
-      )
-      .setColor(0x7c3aed)
-      .setFooter({ text: `Длительность: ${durationMinutes} мин.` });
-
-    const giveawayMessage = await interaction.channel.send({ embeds: [launchEmbed] });
-    await interaction.editReply({
-      content: `✅ Розыгрыш запущен! [Перейти](https://discord.com/channels/${interaction.guildId}/${interaction.channelId}/${giveawayMessage.id})`,
-    });
-
-    setTimeout(() => {
-      enqueueOperation(async () => {
-        const channel = await client.channels.fetch(interaction.channelId).catch(() => null);
-        if (!channel || !channel.isTextBased()) {
-          return;
-        }
-        const players = await getOnlinePlayers(serverIds);
-        if (!players || players.length === 0) {
-          const emptyEmbed = new EmbedBuilder()
-            .setTitle('🎁 Розыгрыш среди игроков онлайн')
-            .setDescription(
-              `**Приз:** ${reward.label}\n**Сервер:** ${serverName}\n\n` +
-              '😔 В момент завершения на выбранном сервере не было игроков онлайн.'
-            )
-            .setColor(0x5865f2)
-            .setFooter({ text: 'Розыгрыш завершён без победителя' });
-          const msg = await channel.messages.fetch(giveawayMessage.id).catch(() => null);
-          if (msg) {
-            await msg.edit({ embeds: [emptyEmbed], components: [] }).catch(() => {});
-          }
-          return;
-        }
-
-        const winner = players[Math.floor(Math.random() * players.length)];
-        const winnerLine = formatOnlineGiveawayWinnerLine(winner);
-        const resultEmbed = new EmbedBuilder()
-          .setTitle('🎁 Розыгрыш среди игроков онлайн')
-          .setDescription(
-            `**Приз:** ${reward.label}\n**Сервер:** ${serverName}\n**Игроков онлайн:** ${players.length}\n\n${winnerLine}`
-          )
-          .setColor(0x5865f2)
-          .setFooter({ text: `Случайный выбор из ${players.length} игроков` });
-
-        const msg = await channel.messages.fetch(giveawayMessage.id).catch(() => null);
-        if (msg) {
-          await msg.edit({ embeds: [resultEmbed], components: [] }).catch(() => {});
-        }
-
-        const grantResult = await grantServerGiveawayWinnerReward(
-          winner,
-          reward,
-          `server_${serverKey}`
-        );
-        if (grantResult.reason === 'already_has_vip') {
-          const target = grantResult.discordId
-            ? `<@${grantResult.discordId}>`
-            : `\`${grantResult.steam64}\``;
-          await channel
-            .send({
-              content:
-                `ℹ️ Победитель ${target} уже имеет активный VIP, поэтому приз не выдан.`,
-            })
-            .catch(() => {});
-          return;
-        }
-        if (grantResult.granted && grantResult.discordId) {
-          await channel
-            .send({
-              content:
-                `🎉 Победитель <@${grantResult.discordId}> получил **${reward.label}** ` +
-                `и роль **${GIVEAWAY_VIP_ROLE_NAME}**.`,
-            })
-            .catch(() => {});
-          return;
-        }
-        if (grantResult.granted) {
-          await channel
-            .send({
-              content:
-                `🎉 Победитель получил **${reward.label}** по SteamID64.\n` +
-                'Discord-аккаунт не привязан, поэтому роль не выдана.',
-            })
-            .catch(() => {});
-          return;
-        }
-        await channel
-          .send({
-            content: '⚠️ Победитель выбран, но награда не выдана автоматически.',
-          })
-          .catch(() => {});
-      });
-    }, durationMinutes * 60 * 1000);
-    return;
-  }
-
-  if (sub === 'end') {
-    const messageId = interaction.options.getString('message_id', true);
-    const giveaway = Array.from(giveaways.values()).find((g) => g.messageId === messageId);
-    if (!giveaway) {
-      await interaction.reply({ content: '❌ Розыгрыш не найден.', ephemeral: true });
-      return;
-    }
-    if (giveaway.ended) {
-      await interaction.reply({ content: '❌ Розыгрыш уже завершён.', ephemeral: true });
-      return;
-    }
-    await endGiveaway(giveaway.id);
-    await interaction.reply({ content: '✅ Розыгрыш завершён.', ephemeral: true });
-    return;
-  }
-
-  if (sub === 'reroll') {
-    const messageId = interaction.options.getString('message_id', true);
-    const giveaway = Array.from(giveaways.values()).find((g) => g.messageId === messageId);
-    if (!giveaway || !giveaway.ended) {
-      await interaction.reply({ content: '❌ Завершённый розыгрыш не найден.', ephemeral: true });
-      return;
-    }
-    giveaway.winners = pickWinners(giveaway.participants, giveaway.winnersCount);
-    const channel = await client.channels.fetch(giveaway.channelId).catch(() => null);
-    if (channel) {
-      const msg = await channel.messages.fetch(giveaway.messageId).catch(() => null);
-      if (msg) await msg.edit({ embeds: [buildGiveawayEmbed(giveaway, true)], components: [] });
-      const mention = giveaway.winners.length
-        ? `🔁 Перевыбор! Поздравляем ${giveaway.winners.map((w) => `<@${w}>`).join(', ')}! Вы выиграли **${giveaway.prize}**!`
-        : '😔 Нет участников для перевыбора.';
-      await channel.send({ content: mention });
-      const rewardResult = await grantGiveawayRewardToWinners(giveaway, 'reroll');
-      if (rewardResult?.skippedAlreadyVip > 0 && Array.isArray(rewardResult.alreadyVipWinners)) {
-        const winnerMentions = rewardResult.alreadyVipWinners.map((id) => `<@${id}>`).join(', ');
-        await channel
-          .send({
-            content:
-              `ℹ️ ${winnerMentions} уже имеют активный VIP, поэтому приз им не выдан.`,
-          })
-          .catch(() => {});
-      }
-    }
-    await interaction.reply({ content: '✅ Победитель перевыбран.', ephemeral: true });
-    return;
-  }
-}
-
 async function registerCommands() {
   const rest = new REST({ version: '10' }).setToken(config.token);
   const commandBuilders = [
@@ -4947,6 +3031,7 @@ client.once('clientReady', async () => {
     await loadPrimaryDb();
     await registerCommands();
     primaryGuild = await client.guilds.fetch(config.guildId);
+    statusModule.apply(client);
     startApiServer();
   } catch (err) {
     console.error('Startup failed:', err);
@@ -4968,6 +3053,14 @@ client.once('clientReady', async () => {
 });
 
 client.on('messageCreate', async (message) => {
+  try {
+    const handledByMediaModule = await mediaModule.handleMessage(message);
+    if (handledByMediaModule) {
+      return;
+    }
+  } catch (err) {
+    console.error('[media] Error:', err?.message || err);
+  }
   try {
     await handleTicketOwnerFirstMessage(message);
   } catch (err) {
@@ -5060,27 +3153,7 @@ client.on('interactionCreate', async (interaction) => {
         await handleTicketClose(interaction);
         return;
       }
-      if (interaction.customId.startsWith('giveaway_join:')) {
-        const giveawayId = interaction.customId.split(':')[1];
-        const giveaway = giveaways.get(giveawayId);
-        if (!giveaway || giveaway.ended) {
-          await interaction.reply({ content: '❌ Розыгрыш уже завершён.', ephemeral: true });
-          return;
-        }
-        const discordId = interaction.user.id;
-        const steam64 = getLinkedSteamId(discordId);
-        if (!steam64) {
-          await interaction.showModal(buildSteamModal(giveawayId));
-          return;
-        }
-        if (giveaway.participants.has(discordId)) {
-          await interaction.reply({ content: '✅ Ты уже участвуешь в розыгрыше!', ephemeral: true });
-          return;
-        }
-        giveaway.participants.add(discordId);
-        const msg = await interaction.channel.messages.fetch(giveaway.messageId).catch(() => null);
-        if (msg) await msg.edit({ embeds: [buildGiveawayEmbed(giveaway)], components: [buildJoinButton(giveawayId)] });
-        await interaction.reply({ content: '🎉 Ты участвуешь в розыгрыше!', ephemeral: true });
+      if (await giveawayModule.handleJoinButton(interaction)) {
         return;
       }
       return;
@@ -5101,30 +3174,7 @@ client.on('interactionCreate', async (interaction) => {
         await handleTicketCreateModalSubmit(interaction);
         return;
       }
-      if (interaction.customId.startsWith('giveaway_steam_modal:')) {
-        const giveawayId = interaction.customId.split(':')[1];
-        const giveaway = giveaways.get(giveawayId);
-        if (!giveaway || giveaway.ended) {
-          await interaction.reply({ content: '❌ Розыгрыш уже завершён.', ephemeral: true });
-          return;
-        }
-        const input = normalizeSteamId64(interaction.fields.getTextInputValue('steamid_input'));
-        if (!isValidSteamId64(input)) {
-          await interaction.reply({ content: getMessagesForLanguage(DEFAULT_LANGUAGE).invalidSteamId, ephemeral: true });
-          return;
-        }
-        const discordId = interaction.user.id;
-        const existingOwner = findDiscordIdBySteam(input);
-        if (existingOwner && existingOwner !== discordId) {
-          await interaction.reply({ content: getMessagesForLanguage(DEFAULT_LANGUAGE).steamidOwned, ephemeral: true });
-          return;
-        }
-        db.links[discordId] = input;
-        await savePrimaryDb();
-        giveaway.participants.add(discordId);
-        const msg = await interaction.channel.messages.fetch(giveaway.messageId).catch(() => null);
-        if (msg) await msg.edit({ embeds: [buildGiveawayEmbed(giveaway)], components: [buildJoinButton(giveawayId)] });
-        await interaction.reply({ content: '🎉 Steam привязан и ты участвуешь в розыгрыше!', ephemeral: true });
+      if (await giveawayModule.handleSteamModal(interaction)) {
         return;
       }
       return;
@@ -5194,7 +3244,7 @@ client.on('interactionCreate', async (interaction) => {
         await interaction.reply({ content: messages.onlyGuild, ephemeral: true });
         return;
       }
-      await handleGiveawayCommand(interaction);
+      await giveawayModule.handleCommand(interaction);
       return;
     }
 
@@ -5971,3 +4021,4 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 client.login(config.token);
+

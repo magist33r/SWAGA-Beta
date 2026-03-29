@@ -16,6 +16,37 @@
         "panelChannelId": "TICKETS_PANEL_CHANNEL_ID",
         "supportRoleId": "SUPPORT_ROLE_ID"
     },
+    "media": {
+        "enabled": false,
+        "channelIds": [
+            "MEDIA_CHANNEL_ID"
+        ],
+        "notifyOnDelete": true,
+        "announceAuthor": true,
+        "likeEmoji": "👍",
+        "dislikeEmoji": "👎"
+    },
+    "status": {
+        "enabled": false,
+        "text": "SWAGA Deathmatch",
+        "type": "playing"
+    },
+    "welcome": {
+        "enabled": false,
+        "channelId": "WELCOME_CHANNEL_ID",
+        "rulesChannelId": "RULES_CHANNEL_ID",
+        "infoChannelId": "INFO_CHANNEL_ID",
+        "donateChannelId": "DONATE_CHANNEL_ID",
+        "projectName": "SWAGA",
+        "titlePrefix": "👋 Добро пожаловать",
+        "color": 15158332
+    },
+    "logs": {
+        "enabled": false,
+        "channelId": "LOG_CHANNEL_ID",
+        "includeVoice": true,
+        "includeMessages": true
+    },
     "stats": {
         "cfCloudApplicationId": "YOUR_CFCLOUD_APP_ID_OR_EMPTY",
         "cfCloudApplicationSecret": "YOUR_CFCLOUD_APP_SECRET_OR_EMPTY",
