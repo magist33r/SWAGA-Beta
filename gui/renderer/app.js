@@ -1,4 +1,16 @@
-﻿const state = {
+﻿const API_TIMEOUT_MS = 12000;
+const API_MAX_GET_RETRIES = 1;
+const VIP_FETCH_PAGE_SIZE = 100;
+const RETRYABLE_ERROR_CODES = new Set([
+  'network_failed',
+  'request_timeout',
+  'http_429',
+  'http_502',
+  'http_503',
+  'http_504',
+]);
+
+const state = {
   config: null,
   page: 1,
   pageSize: 50,
@@ -6,12 +18,15 @@
   query: '',
   sortBy: '',
   sortDir: 'asc',
+  statusFilter: 'all',
   editingSteam64: null,
   selectedSteam64: null,
   lastItems: [],
   lastTotal: 0,
   lastPage: 1,
   lastPageSize: 50,
+  logsRawLines: [],
+  logsFetchedAt: null,
 };
 
 const el = (id) => document.getElementById(id);
@@ -19,7 +34,7 @@ const list = (selector) => Array.from(document.querySelectorAll(selector));
 
 const API_ERROR_MESSAGES = {
   unauthorized: 'Неверный токен API.',
-  db_not_ready: 'API ещё не готово. Попробуй чуть позже.',
+  db_not_ready: 'API еще не готово. Попробуй позже.',
   invalid_discord_id: 'Некорректный Discord ID.',
   invalid_steam64: 'Некорректный SteamID64.',
   steam64_not_found: 'SteamID64 не найден.',
@@ -27,7 +42,22 @@ const API_ERROR_MESSAGES = {
   invalid_days: 'Некорректное количество дней.',
   invalid_expires_at: 'Некорректная дата окончания.',
   missing_expires: 'Нужно указать срок.',
-  origin_not_allowed: 'Источник не разрешён настройками API.',
+  origin_not_allowed: 'Источник не разрешен настройками API.',
+  request_timeout: 'Превышено время ожидания API.',
+  network_failed: 'Нет соединения с API.',
+  invalid_json: 'API вернул некорректный ответ.',
+  log_read_failed: 'Не удалось прочитать лог-файл.',
+  server_error: 'Внутренняя ошибка API.',
+  request_failed: 'Ошибка запроса к API.',
+  http_400: 'Ошибка запроса (400).',
+  http_401: 'Доступ запрещен (401).',
+  http_403: 'Доступ запрещен (403).',
+  http_404: 'Маршрут API не найден (404).',
+  http_429: 'Слишком много запросов (429).',
+  http_500: 'Ошибка сервера (500).',
+  http_502: 'Плохой ответ от сервера (502).',
+  http_503: 'API временно недоступно (503).',
+  http_504: 'Истекло время ожидания шлюза (504).',
 };
 
 let connectionStatus = null;
@@ -46,6 +76,7 @@ let brandMark = null;
 let brandDot = null;
 let searchInput = null;
 let searchButton = null;
+let statusFilterInput = null;
 let vipTable = null;
 let prevPageBtn = null;
 let nextPageBtn = null;
@@ -54,11 +85,20 @@ let statTotal = null;
 let statForever = null;
 let statTimed = null;
 let statInvalid = null;
+let statLinks = null;
 let expiringList = null;
 let statsTimestamp = null;
 let refreshLogsBtn = null;
 let logOutput = null;
 let logsSection = null;
+let logsSearchInput = null;
+let logsLevelInput = null;
+let logsLimitInput = null;
+let logsMeta = null;
+let healthTime = null;
+let healthVersion = null;
+let healthLatency = null;
+let healthUpdated = null;
 
 let giveDiscord = null;
 let giveSteam = null;
@@ -104,6 +144,7 @@ function mapElements() {
   brandDot = document.querySelector('.brand-dot');
   searchInput = el('searchInput');
   searchButton = el('searchButton');
+  statusFilterInput = el('statusFilter');
   vipTable = el('vipTable');
   prevPageBtn = el('prevPage');
   nextPageBtn = el('nextPage');
@@ -112,11 +153,20 @@ function mapElements() {
   statForever = el('statForever');
   statTimed = el('statTimed');
   statInvalid = el('statInvalid');
+  statLinks = el('statLinks');
   expiringList = el('expiringList');
   statsTimestamp = el('statsTimestamp');
   refreshLogsBtn = el('refreshLogs');
   logOutput = el('logOutput');
   logsSection = el('logs');
+  logsSearchInput = el('logsSearch');
+  logsLevelInput = el('logsLevel');
+  logsLimitInput = el('logsLimit');
+  logsMeta = el('logsMeta');
+  healthTime = el('healthTime');
+  healthVersion = el('healthVersion');
+  healthLatency = el('healthLatency');
+  healthUpdated = el('healthUpdated');
 
   giveDiscord = el('giveDiscord');
   giveSteam = el('giveSteam');
@@ -151,6 +201,43 @@ function showToast(message, type = 'info') {
   toast.classList.add('show');
   toast.style.background = type === 'error' ? '#e44949' : 'rgba(10, 12, 18, 0.9)';
   setTimeout(() => toast.classList.remove('show'), 2500);
+}
+
+function setButtonLoading(button, isLoading) {
+  if (!button) {
+    return;
+  }
+  button.disabled = Boolean(isLoading);
+  button.classList.toggle('is-loading', Boolean(isLoading));
+}
+
+async function withButtonLoading(button, task) {
+  if (!button) {
+    return task();
+  }
+  if (button.classList.contains('is-loading')) {
+    return undefined;
+  }
+  setButtonLoading(button, true);
+  try {
+    return await task();
+  } finally {
+    setButtonLoading(button, false);
+  }
+}
+
+function mapApiErrorMessage(error) {
+  const code = String(error?.message || 'request_failed');
+  return API_ERROR_MESSAGES[code] || code;
+}
+
+function sanitizeApiBaseUrl(value) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) {
+    return 'http://127.0.0.1:8787';
+  }
+  const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+  return withScheme.replace(/\/+$/, '');
 }
 
 function setConnectionStatus(online, text) {
@@ -232,37 +319,119 @@ function updateSortIndicators() {
 }
 
 function buildApiUrl(path) {
-  const base = state.config.apiBaseUrl.replace(/\/+$/, '');
+  const base = sanitizeApiBaseUrl(state.config?.apiBaseUrl);
   return `${base}${path}`;
+}
+
+async function readJsonResponse(response) {
+  const raw = await response.text();
+  if (!raw) {
+    return {};
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    throw new Error('invalid_json');
+  }
 }
 
 async function apiRequest(path, options = {}) {
   if (!state.config) {
     throw new Error('config_not_loaded');
   }
+
+  const method = String(options.method || 'GET').toUpperCase();
+  const retries = Number.isFinite(options.retries)
+    ? Math.max(0, Number(options.retries))
+    : method === 'GET'
+      ? API_MAX_GET_RETRIES
+      : 0;
+
   const headers = {
     'Content-Type': 'application/json',
     'x-api-token': state.config.apiToken || '',
     ...(options.headers || {}),
   };
-  const response = await fetch(buildApiUrl(path), {
-    ...options,
-    headers,
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || data.ok === false) {
-    const errorCode = data.error || response.statusText || 'request_failed';
-    const message = API_ERROR_MESSAGES[errorCode] || errorCode;
-    throw new Error(message);
+
+  let lastError = null;
+
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+
+    try {
+      const response = await fetch(buildApiUrl(path), {
+        ...options,
+        method,
+        headers,
+        signal: controller.signal,
+      });
+      const data = await readJsonResponse(response);
+      if (!response.ok || data.ok === false) {
+        const errorCode = data.error ? String(data.error) : `http_${response.status}`;
+        throw new Error(errorCode || 'request_failed');
+      }
+      return data;
+    } catch (err) {
+      if (err?.name === 'AbortError') {
+        lastError = new Error('request_timeout');
+      } else if (err instanceof Error) {
+        if (err.message === 'invalid_json') {
+          lastError = err;
+        } else if (err.message.startsWith('http_') || API_ERROR_MESSAGES[err.message]) {
+          lastError = err;
+        } else {
+          lastError = new Error('network_failed');
+        }
+      } else {
+        lastError = new Error('request_failed');
+      }
+
+      const shouldRetry = attempt < retries && RETRYABLE_ERROR_CODES.has(lastError.message);
+      if (!shouldRetry) {
+        throw lastError;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+    } finally {
+      clearTimeout(timeout);
+    }
   }
-  return data;
+
+  throw lastError || new Error('request_failed');
+}
+
+function setHealthMetrics(data, latencyMs) {
+  if (healthTime) {
+    healthTime.textContent = data?.time || '-';
+  }
+  if (healthVersion) {
+    healthVersion.textContent = data?.version || '-';
+  }
+  if (healthLatency) {
+    healthLatency.textContent = Number.isFinite(latencyMs) ? `${latencyMs} ms` : '-';
+  }
+  if (healthUpdated) {
+    healthUpdated.textContent = new Date().toLocaleTimeString('ru-RU');
+  }
 }
 
 async function loadConfig() {
   const result = await window.vipGui.getConfig();
   state.config = result.config;
-  apiUrlInput.value = state.config.apiBaseUrl || '';
-  apiTokenInput.value = state.config.apiToken || '';
+  state.config.apiBaseUrl = sanitizeApiBaseUrl(state.config.apiBaseUrl);
+
+  if (apiUrlInput) {
+    apiUrlInput.value = state.config.apiBaseUrl || '';
+  }
+  if (apiTokenInput) {
+    apiTokenInput.value = state.config.apiToken || '';
+  }
+  if (statusFilterInput) {
+    statusFilterInput.value = state.statusFilter;
+  }
+  if (logsLimitInput && !logsLimitInput.value) {
+    logsLimitInput.value = '500';
+  }
   if (configPath) {
     configPath.textContent = result.path || '';
   }
@@ -271,12 +440,16 @@ async function loadConfig() {
 
 async function saveConfig() {
   const payload = {
-    apiBaseUrl: apiUrlInput.value.trim() || 'http://127.0.0.1:8787',
-    apiToken: apiTokenInput.value.trim(),
+    apiBaseUrl: sanitizeApiBaseUrl(apiUrlInput?.value),
+    apiToken: apiTokenInput?.value.trim() || '',
     theme: state.config?.theme || 'light',
   };
   const result = await window.vipGui.saveConfig(payload);
   state.config = result.config;
+  state.config.apiBaseUrl = sanitizeApiBaseUrl(state.config.apiBaseUrl);
+  if (apiUrlInput) {
+    apiUrlInput.value = state.config.apiBaseUrl;
+  }
   showToast('Настройки сохранены');
 }
 
@@ -285,28 +458,45 @@ async function persistTheme() {
     return;
   }
   const payload = {
-    apiBaseUrl: state.config.apiBaseUrl,
-    apiToken: state.config.apiToken,
+    apiBaseUrl: sanitizeApiBaseUrl(state.config.apiBaseUrl),
+    apiToken: state.config.apiToken || '',
     theme: state.config.theme || 'light',
   };
   const result = await window.vipGui.saveConfig(payload);
   state.config = result.config;
+  state.config.apiBaseUrl = sanitizeApiBaseUrl(state.config.apiBaseUrl);
 }
 
 async function testConnection(options = {}) {
   const silent = Boolean(options.silent);
   try {
-    const data = await apiRequest('/api/health');
-    setConnectionStatus(true, `API онлайн: ${data.time}`);
+    const started = performance.now();
+    const data = await apiRequest('/api/health', { retries: 0 });
+    const latencyMs = Math.round(performance.now() - started);
+    setConnectionStatus(true, `API онлайн (${latencyMs} ms)`);
+    setHealthMetrics(data, latencyMs);
     if (!silent) {
       showToast('Соединение установлено');
     }
   } catch (err) {
     setConnectionStatus(false, 'API не отвечает');
+    setHealthMetrics(null, null);
     if (!silent) {
-      showToast(`Ошибка подключения: ${err.message}`, 'error');
+      showToast(`Ошибка подключения: ${mapApiErrorMessage(err)}`, 'error');
     }
   }
+}
+
+function getVipStatus(item) {
+  const now = Math.floor(Date.now() / 1000);
+  const expiresAt = Number(item.expiresAt) || 0;
+  if (expiresAt === 0) {
+    return { key: 'forever', label: 'Навсегда', tone: 'success' };
+  }
+  if (expiresAt <= now) {
+    return { key: 'expired', label: 'Истек', tone: 'danger' };
+  }
+  return { key: 'active', label: 'Активен', tone: 'warning' };
 }
 
 function renderDetail(item) {
@@ -319,21 +509,31 @@ function renderDetail(item) {
     detailTariff.textContent = '-';
     detailExpires.textContent = '-';
     detailStatus.textContent = 'Нет данных';
+    detailStatus.className = 'badge';
     if (detailHint) {
       detailHint.textContent = 'Выберите запись в таблице, чтобы увидеть детали.';
     }
     return;
   }
 
+  const status = getVipStatus(item);
   detailSteam.textContent = item.steam64;
   detailDiscord.textContent = item.discordId || '-';
   detailTariff.textContent = formatTariff(item);
   detailExpires.textContent = formatExpires(item.expiresAt);
-  detailStatus.textContent = item.expiresAt ? 'VIP активен' : 'VIP навсегда';
+  detailStatus.textContent = status.label;
+  detailStatus.className = `badge ${status.tone}`;
+
   if (detailHint) {
-    detailHint.textContent = item.expiresAt
-      ? `Действует до: ${formatExpires(item.expiresAt)}`
-      : 'VIP выдан навсегда.';
+    if (!item.discordId) {
+      detailHint.textContent = 'Привязка Discord отсутствует.';
+    } else if (status.key === 'expired') {
+      detailHint.textContent = `Истек: ${formatExpires(item.expiresAt)}`;
+    } else if (status.key === 'forever') {
+      detailHint.textContent = 'VIP выдан навсегда.';
+    } else {
+      detailHint.textContent = `Действует до: ${formatExpires(item.expiresAt)}`;
+    }
   }
 }
 
@@ -388,36 +588,59 @@ function renderExpiryEditor(cell, item) {
     renderVipList(state.lastItems, state.lastTotal, state.lastPage, state.lastPageSize);
   });
 
-  saveBtn.addEventListener('click', async () => {
-    let expiresAt = 0;
-    if (!foreverToggle.checked) {
-      if (!input.value) {
-        showToast('Укажите дату окончания', 'error');
-        return;
+  saveBtn.addEventListener('click', () => {
+    void withButtonLoading(saveBtn, async () => {
+      let expiresAt = 0;
+      if (!foreverToggle.checked) {
+        if (!input.value) {
+          showToast('Укажите дату окончания', 'error');
+          return;
+        }
+        const date = new Date(input.value);
+        if (Number.isNaN(date.getTime())) {
+          showToast('Некорректная дата', 'error');
+          return;
+        }
+        expiresAt = Math.floor(date.getTime() / 1000);
       }
-      const date = new Date(input.value);
-      if (Number.isNaN(date.getTime())) {
-        showToast('Некорректная дата', 'error');
-        return;
-      }
-      expiresAt = Math.floor(date.getTime() / 1000);
-    }
 
-    try {
-      await apiRequest('/api/vip/set', {
-        method: 'POST',
-        body: JSON.stringify({
-          steam64: item.steam64,
-          expiresAt,
-        }),
-      });
-      showToast('Срок обновлён');
-      state.editingSteam64 = null;
-      await refreshAll();
-    } catch (err) {
-      showToast(`Ошибка сохранения: ${err.message}`, 'error');
-    }
+      try {
+        await apiRequest('/api/vip/set', {
+          method: 'POST',
+          body: JSON.stringify({
+            steam64: item.steam64,
+            expiresAt,
+          }),
+          retries: 0,
+        });
+        showToast('Срок обновлен');
+        state.editingSteam64 = null;
+        await refreshAll();
+      } catch (err) {
+        showToast(`Ошибка сохранения: ${mapApiErrorMessage(err)}`, 'error');
+      }
+    });
   });
+}
+
+function createVipStatusBadges(item) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'status-stack';
+
+  const status = getVipStatus(item);
+  const mainBadge = document.createElement('span');
+  mainBadge.className = `badge ${status.tone}`;
+  mainBadge.textContent = status.label;
+  wrapper.appendChild(mainBadge);
+
+  if (!item.discordId) {
+    const unlinkedBadge = document.createElement('span');
+    unlinkedBadge.className = 'badge outline';
+    unlinkedBadge.textContent = 'Без Discord';
+    wrapper.appendChild(unlinkedBadge);
+  }
+
+  return wrapper;
 }
 
 function renderVipList(items, total, page, pageSize) {
@@ -425,13 +648,14 @@ function renderVipList(items, total, page, pageSize) {
   state.lastTotal = total;
   state.lastPage = page;
   state.lastPageSize = pageSize;
+
   if (state.editingSteam64 && !items.some((item) => item.steam64 === state.editingSteam64)) {
     state.editingSteam64 = null;
   }
 
   vipTable.innerHTML = '';
   if (!items.length) {
-    vipTable.innerHTML = '<tr><td colspan="5" class="empty">Нет данных</td></tr>';
+    vipTable.innerHTML = '<tr><td colspan="6" class="empty">Нет данных</td></tr>';
     renderDetail(null);
   } else {
     let selectedItem = null;
@@ -455,9 +679,12 @@ function renderVipList(items, total, page, pageSize) {
 
       const tariffCell = document.createElement('td');
       const tag = document.createElement('span');
-      tag.className = 'badge';
+      tag.className = 'badge neutral';
       tag.textContent = formatTariff(item);
       tariffCell.appendChild(tag);
+
+      const statusCell = document.createElement('td');
+      statusCell.appendChild(createVipStatusBadges(item));
 
       const expiresCell = document.createElement('td');
       expiresCell.className = 'expires-cell';
@@ -486,7 +713,7 @@ function renderVipList(items, total, page, pageSize) {
         expiresCell.append(value, editBtn);
       }
 
-      row.append(indexCell, steamCell, discordCell, tariffCell, expiresCell);
+      row.append(indexCell, steamCell, discordCell, tariffCell, statusCell, expiresCell);
       row.addEventListener('click', (event) => {
         if (event.target.closest('button')) {
           return;
@@ -519,22 +746,75 @@ function renderVipList(items, total, page, pageSize) {
   updateSortIndicators();
 }
 
+function matchesVipFilter(item) {
+  const status = getVipStatus(item);
+  switch (state.statusFilter) {
+    case 'active':
+      return status.key === 'active' || status.key === 'forever';
+    case 'forever':
+      return status.key === 'forever';
+    case 'expired':
+      return status.key === 'expired';
+    case 'unlinked':
+      return !item.discordId;
+    default:
+      return true;
+  }
+}
+
+async function fetchVipDataset() {
+  const baseParams = new URLSearchParams();
+  if (state.query) {
+    baseParams.set('q', state.query);
+  }
+  if (state.sortBy) {
+    baseParams.set('sortBy', state.sortBy);
+    baseParams.set('sortDir', state.sortDir);
+  }
+
+  const allItems = [];
+  let page = 1;
+  let total = null;
+
+  while (true) {
+    const params = new URLSearchParams(baseParams);
+    params.set('page', String(page));
+    params.set('pageSize', String(VIP_FETCH_PAGE_SIZE));
+    const data = await apiRequest(`/api/vip/list?${params.toString()}`);
+    const items = Array.isArray(data.items) ? data.items : [];
+
+    if (total === null) {
+      total = Number(data.total) || 0;
+    }
+
+    allItems.push(...items);
+
+    if (!items.length || allItems.length >= total) {
+      break;
+    }
+    page += 1;
+    if (page > 1000) {
+      break;
+    }
+  }
+
+  return allItems;
+}
+
 async function loadVipList() {
   try {
-    const params = new URLSearchParams();
-    params.set('page', String(state.page));
-    params.set('pageSize', String(state.pageSize));
-    if (state.query) {
-      params.set('q', state.query);
+    const allItems = await fetchVipDataset();
+    const filtered = allItems.filter(matchesVipFilter);
+    const total = filtered.length;
+    const totalPages = Math.max(1, Math.ceil(total / state.pageSize));
+    if (state.page > totalPages) {
+      state.page = totalPages;
     }
-    if (state.sortBy) {
-      params.set('sortBy', state.sortBy);
-      params.set('sortDir', state.sortDir);
-    }
-    const data = await apiRequest(`/api/vip/list?${params.toString()}`);
-    renderVipList(data.items || [], data.total || 0, data.page || 1, data.pageSize || state.pageSize);
+    const offset = (state.page - 1) * state.pageSize;
+    const pageItems = filtered.slice(offset, offset + state.pageSize);
+    renderVipList(pageItems, total, state.page, state.pageSize);
   } catch (err) {
-    showToast(`Не удалось загрузить список: ${err.message}`, 'error');
+    showToast(`Не удалось загрузить список: ${mapApiErrorMessage(err)}`, 'error');
   }
 }
 
@@ -545,32 +825,89 @@ async function loadStats() {
     statForever.textContent = data.forever ?? '0';
     statTimed.textContent = data.timed ?? '0';
     statInvalid.textContent = data.invalidLinks ?? '0';
+    if (statLinks) {
+      statLinks.textContent = data.links ?? '0';
+    }
     statsTimestamp.textContent = new Date().toLocaleTimeString('ru-RU');
 
     expiringList.innerHTML = '';
     if (Array.isArray(data.expiring) && data.expiring.length > 0) {
       data.expiring.forEach((entry) => {
         const line = document.createElement('div');
-        line.textContent = `Истекает через ${entry.hours} ч: ${entry.count}`;
+        line.textContent = `Истекает в пределах ${entry.hours} ч: ${entry.count}`;
         expiringList.appendChild(line);
       });
     } else {
       expiringList.innerHTML = '<p class="muted">Нет данных о ближайших истечениях.</p>';
     }
   } catch (err) {
-    showToast(`Не удалось загрузить статистику: ${err.message}`, 'error');
+    showToast(`Не удалось загрузить статистику: ${mapApiErrorMessage(err)}`, 'error');
+  }
+}
+
+function detectLogLevel(line) {
+  const value = String(line || '').toLowerCase();
+  if (value.includes('error') || value.includes('failed') || value.includes('exception')) {
+    return 'error';
+  }
+  if (value.includes('warn')) {
+    return 'warn';
+  }
+  if (value.includes('api_') || value.includes('/api/')) {
+    return 'api';
+  }
+  if (value.includes('vip')) {
+    return 'vip';
+  }
+  return 'info';
+}
+
+function matchesLogFilters(line) {
+  const text = String(line || '');
+  const lower = text.toLowerCase();
+  const query = String(logsSearchInput?.value || '').trim().toLowerCase();
+  if (query && !lower.includes(query)) {
+    return false;
+  }
+
+  const level = String(logsLevelInput?.value || 'all');
+  if (level === 'all') {
+    return true;
+  }
+  return detectLogLevel(text) === level;
+}
+
+function applyLogFilters() {
+  if (!logOutput) {
+    return;
+  }
+  const filtered = state.logsRawLines.filter(matchesLogFilters);
+  logOutput.textContent = filtered.length ? filtered.join('\n') : 'Нет строк по текущему фильтру.';
+
+  if (logsMeta) {
+    const fetchedAt = state.logsFetchedAt
+      ? new Date(state.logsFetchedAt).toLocaleTimeString('ru-RU')
+      : '-';
+    logsMeta.textContent = `Показано ${filtered.length} из ${state.logsRawLines.length} строк. Обновлено: ${fetchedAt}.`;
   }
 }
 
 async function loadLogs() {
   logsLoaded = true;
+  const limit = Math.max(1, Number(logsLimitInput?.value) || 500);
   try {
-    const data = await apiRequest('/api/logs?limit=500');
-    const lines = data.lines || [];
-    logOutput.textContent = lines.length ? lines.join('\n') : 'Логи пусты.';
+    const data = await apiRequest(`/api/logs?limit=${limit}`);
+    state.logsRawLines = Array.isArray(data.lines) ? data.lines : [];
+    state.logsFetchedAt = Date.now();
+    applyLogFilters();
   } catch (err) {
+    state.logsRawLines = [];
+    state.logsFetchedAt = null;
     logOutput.textContent = 'Не удалось загрузить логи.';
-    showToast(`Логи: ${err.message}`, 'error');
+    if (logsMeta) {
+      logsMeta.textContent = 'Ошибка загрузки логов.';
+    }
+    showToast(`Логи: ${mapApiErrorMessage(err)}`, 'error');
   }
 }
 
@@ -588,11 +925,12 @@ async function giveVip() {
     await apiRequest('/api/vip/give', {
       method: 'POST',
       body: JSON.stringify(payload),
+      retries: 0,
     });
     showToast('VIP выдан');
     await refreshAll();
   } catch (err) {
-    showToast(`Ошибка выдачи: ${err.message}`, 'error');
+    showToast(`Ошибка выдачи: ${mapApiErrorMessage(err)}`, 'error');
   }
 }
 
@@ -609,11 +947,12 @@ async function removeVip() {
     await apiRequest('/api/vip/remove', {
       method: 'POST',
       body: JSON.stringify(payload),
+      retries: 0,
     });
     showToast('VIP снят');
     await refreshAll();
   } catch (err) {
-    showToast(`Ошибка снятия: ${err.message}`, 'error');
+    showToast(`Ошибка снятия: ${mapApiErrorMessage(err)}`, 'error');
   }
 }
 
@@ -639,11 +978,12 @@ async function setVip() {
     await apiRequest('/api/vip/set', {
       method: 'POST',
       body: JSON.stringify(payload),
+      retries: 0,
     });
-    showToast('Срок обновлён');
+    showToast('Срок обновлен');
     await refreshAll();
   } catch (err) {
-    showToast(`Ошибка сохранения: ${err.message}`, 'error');
+    showToast(`Ошибка сохранения: ${mapApiErrorMessage(err)}`, 'error');
   }
 }
 
@@ -652,7 +992,7 @@ async function refreshAll(options = {}) {
     return refreshInFlight;
   }
   const includeLogs = Boolean(options.includeLogs);
-  const tasks = [loadVipList(), loadStats()];
+  const tasks = [testConnection({ silent: true }), loadVipList(), loadStats()];
   if (includeLogs) {
     tasks.push(loadLogs());
   }
@@ -664,7 +1004,6 @@ async function refreshAll(options = {}) {
 
 function scheduleInitialLoad() {
   const run = () => {
-    void testConnection({ silent: true });
     void refreshAll({ includeLogs: false });
   };
   if ('requestIdleCallback' in window) {
@@ -819,17 +1158,27 @@ function setupNavIcons() {
 function bindEvents() {
   if (searchButton && searchInput) {
     searchButton.addEventListener('click', () => {
-      state.query = searchInput.value.trim();
-      state.page = 1;
-      loadVipList();
+      void withButtonLoading(searchButton, async () => {
+        state.query = searchInput.value.trim();
+        state.page = 1;
+        await loadVipList();
+      });
     });
 
     searchInput.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') {
         state.query = searchInput.value.trim();
         state.page = 1;
-        loadVipList();
+        void loadVipList();
       }
+    });
+  }
+
+  if (statusFilterInput) {
+    statusFilterInput.addEventListener('change', () => {
+      state.statusFilter = statusFilterInput.value || 'all';
+      state.page = 1;
+      void loadVipList();
     });
   }
 
@@ -837,7 +1186,7 @@ function bindEvents() {
     prevPageBtn.addEventListener('click', () => {
       if (state.page > 1) {
         state.page -= 1;
-        loadVipList();
+        void loadVipList();
       }
     });
   }
@@ -846,7 +1195,7 @@ function bindEvents() {
     nextPageBtn.addEventListener('click', () => {
       if (state.page < state.totalPages) {
         state.page += 1;
-        loadVipList();
+        void loadVipList();
       }
     });
   }
@@ -861,39 +1210,64 @@ function bindEvents() {
         state.sortDir = 'asc';
       }
       state.page = 1;
-      loadVipList();
+      void loadVipList();
     });
   });
 
   if (refreshAllBtn) {
     refreshAllBtn.addEventListener('click', () => {
-      refreshAll({ includeLogs: true });
+      void withButtonLoading(refreshAllBtn, async () => {
+        await refreshAll({ includeLogs: true });
+      });
     });
   }
+
   if (refreshLogsBtn) {
-    refreshLogsBtn.addEventListener('click', loadLogs);
+    refreshLogsBtn.addEventListener('click', () => {
+      void withButtonLoading(refreshLogsBtn, async () => {
+        await loadLogs();
+      });
+    });
   }
 
   if (saveConfigBtn) {
-    saveConfigBtn.addEventListener('click', async () => {
-      await saveConfig();
+    saveConfigBtn.addEventListener('click', () => {
+      void withButtonLoading(saveConfigBtn, async () => {
+        await saveConfig();
+      });
     });
   }
 
   if (testConnectionBtn) {
     testConnectionBtn.addEventListener('click', () => {
-      testConnection();
+      void withButtonLoading(testConnectionBtn, async () => {
+        await testConnection();
+      });
     });
   }
 
   if (giveVipBtn) {
-    giveVipBtn.addEventListener('click', giveVip);
+    giveVipBtn.addEventListener('click', () => {
+      void withButtonLoading(giveVipBtn, async () => {
+        await giveVip();
+      });
+    });
   }
+
   if (removeVipBtn) {
-    removeVipBtn.addEventListener('click', removeVip);
+    removeVipBtn.addEventListener('click', () => {
+      void withButtonLoading(removeVipBtn, async () => {
+        await removeVip();
+      });
+    });
   }
+
   if (setVipBtn) {
-    setVipBtn.addEventListener('click', setVip);
+    setVipBtn.addEventListener('click', () => {
+      void withButtonLoading(setVipBtn, async () => {
+        await setVip();
+      });
+    });
   }
 
   if (toggleTokenBtn && apiTokenInput) {
@@ -905,17 +1279,35 @@ function bindEvents() {
   }
 
   if (toggleThemeBtn) {
-    toggleThemeBtn.addEventListener('click', async () => {
-      const next = getActiveTheme() === 'dark' ? 'light' : 'dark';
-      applyTheme(next);
-      await persistTheme();
+    toggleThemeBtn.addEventListener('click', () => {
+      void withButtonLoading(toggleThemeBtn, async () => {
+        const next = getActiveTheme() === 'dark' ? 'light' : 'dark';
+        applyTheme(next);
+        await persistTheme();
+      });
     });
   }
 
   if (detailRefreshBtn) {
-    detailRefreshBtn.addEventListener('click', async () => {
-      await refreshAll({ includeLogs: false });
-      showToast('Данные обновлены');
+    detailRefreshBtn.addEventListener('click', () => {
+      void withButtonLoading(detailRefreshBtn, async () => {
+        await refreshAll({ includeLogs: false });
+        showToast('Данные обновлены');
+      });
+    });
+  }
+
+  if (logsSearchInput) {
+    logsSearchInput.addEventListener('input', applyLogFilters);
+  }
+
+  if (logsLevelInput) {
+    logsLevelInput.addEventListener('change', applyLogFilters);
+  }
+
+  if (logsLimitInput) {
+    logsLimitInput.addEventListener('change', () => {
+      void loadLogs();
     });
   }
 }

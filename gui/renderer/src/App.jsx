@@ -47,6 +47,10 @@ export default function App() {
         </div>
 
         <div className="nav-actions">
+          <div className="status offline" id="connectionStatus">
+            <span className="dot" />
+            <span>API не отвечает</span>
+          </div>
           <button className="btn ghost icon" id="toggleTheme" type="button">
             <span className="theme-icon" aria-hidden="true" />
             <span className="theme-label">Светлая тема</span>
@@ -63,8 +67,8 @@ export default function App() {
             <p className="eyebrow">SWAGA VIP CONTROL</p>
             <h1>Управление VIP для DayZ</h1>
             <p className="subtitle">
-              Автоматизация белого списка и ролей: выдача VIP, отслеживание сроков,
-              синхронизация с Discord и аудит действий администраторов.
+              Выдача и снятие VIP, контроль сроков, синхронизация с Discord и быстрый аудит действий
+              через единый GUI.
             </p>
             <div className="hero-cta">
               <a className="btn primary" href="#catalog">
@@ -85,26 +89,25 @@ export default function App() {
             <div className="hero-card glass">
               <div className="hero-card-header">
                 <span className="chip">Live</span>
-                <span className="meta">Сводка по серверу</span>
+                <span className="meta">Текущее состояние API</span>
               </div>
               <div className="hero-card-body">
                 <div className="hero-metric">
-                  <span className="meta">Сервер</span>
-                  <strong>Primary</strong>
+                  <span className="meta">API time</span>
+                  <strong id="healthTime">-</strong>
                 </div>
                 <div className="hero-metric">
-                  <span className="meta">Whitelist</span>
-                  <strong>SWG Loadout</strong>
+                  <span className="meta">Version</span>
+                  <strong id="healthVersion">-</strong>
                 </div>
                 <div className="hero-metric">
-                  <span className="meta">Статус</span>
-                  <strong>Auto Expire</strong>
+                  <span className="meta">Latency</span>
+                  <strong id="healthLatency">-</strong>
                 </div>
               </div>
             </div>
             <div className="hero-glass-note glass">
-              Данные обновляются в фоне. Изменения применяются атомарно, чтобы whitelist всегда
-              оставался консистентным.
+              Последняя проверка подключения: <strong id="healthUpdated">-</strong>
             </div>
           </div>
         </section>
@@ -128,7 +131,7 @@ export default function App() {
                 </button>
               </div>
             </div>
-            <div className="actions">
+            <div className="actions-inline">
               <button className="btn" id="saveConfig" type="button">
                 Сохранить
               </button>
@@ -137,8 +140,7 @@ export default function App() {
               </button>
             </div>
             <p className="hint">
-              Убедись, что API доступен и открыт порт 8787. При работе с VPN обнови URL и токен
-              в настройках.
+              Убедитесь, что API включен в конфиге бота и порт доступен на сервере.
             </p>
           </section>
 
@@ -163,14 +165,20 @@ export default function App() {
                 </p>
               </div>
               <div className="stat glass">
-                <p className="stat-label">Срок</p>
+                <p className="stat-label">Срочные</p>
                 <p className="stat-value" id="statTimed">
                   -
                 </p>
               </div>
               <div className="stat glass">
-                <p className="stat-label">Ошибочные привязки</p>
+                <p className="stat-label">Проблемные привязки</p>
                 <p className="stat-value" id="statInvalid">
+                  -
+                </p>
+              </div>
+              <div className="stat glass">
+                <p className="stat-label">Всего привязок</p>
+                <p className="stat-value" id="statLinks">
                   -
                 </p>
               </div>
@@ -181,13 +189,27 @@ export default function App() {
           </section>
 
           <section className="panel glass list" id="catalog">
-            <div className="panel-header">
+            <div className="panel-header panel-header-wrap">
               <h2>VIP</h2>
-              <div className="search">
-                <input id="searchInput" type="text" placeholder="Поиск по Steam64 или Discord ID" />
-                <button className="btn ghost" id="searchButton" type="button">
-                  Найти
-                </button>
+              <div className="search-group">
+                <div className="search">
+                  <input id="searchInput" type="text" placeholder="Поиск по Steam64 или Discord ID" />
+                  <button className="btn ghost" id="searchButton" type="button">
+                    Найти
+                  </button>
+                </div>
+                <div className="inline">
+                  <label className="meta compact-label" htmlFor="statusFilter">
+                    Фильтр:
+                  </label>
+                  <select id="statusFilter">
+                    <option value="all">Все</option>
+                    <option value="active">Активные</option>
+                    <option value="forever">Навсегда</option>
+                    <option value="expired">Истекшие</option>
+                    <option value="unlinked">Без Discord</option>
+                  </select>
+                </div>
               </div>
             </div>
             <div className="table-wrap glass">
@@ -202,6 +224,7 @@ export default function App() {
                         Тариф
                       </button>
                     </th>
+                    <th>Статус</th>
                     <th>
                       <div className="th-wrap">
                         <button className="sort" data-sort="expiresAt" type="button">
@@ -216,7 +239,7 @@ export default function App() {
                 </thead>
                 <tbody id="vipTable">
                   <tr>
-                    <td colSpan="5" className="empty">
+                    <td colSpan="6" className="empty">
                       Нет данных
                     </td>
                   </tr>
@@ -229,7 +252,7 @@ export default function App() {
               </button>
               <span id="pageInfo">1 / 1</span>
               <button className="btn ghost" id="nextPage" type="button">
-                Вперед
+                Вперёд
               </button>
             </div>
           </section>
@@ -237,7 +260,7 @@ export default function App() {
           <section className="panel glass detail" id="detail">
             <div className="panel-header">
               <h2>Детали</h2>
-              <span className="meta">Выбери запись в таблице</span>
+              <span className="meta">Выберите запись в таблице</span>
             </div>
             <div className="detail-grid">
               <div className="detail-item">
@@ -348,12 +371,30 @@ export default function App() {
           </section>
 
           <section className="panel glass logs" id="logs">
-            <div className="panel-header">
-              <h2>Логи (последние 500 строк)</h2>
+            <div className="panel-header panel-header-wrap">
+              <h2>Логи API</h2>
               <button className="btn ghost" id="refreshLogs" type="button">
                 Обновить логи
               </button>
             </div>
+            <div className="logs-controls">
+              <input id="logsSearch" type="text" placeholder="Поиск по логам..." />
+              <select id="logsLevel">
+                <option value="all">Все</option>
+                <option value="error">Только ошибки</option>
+                <option value="warn">Предупреждения</option>
+                <option value="vip">VIP операции</option>
+                <option value="api">API запросы</option>
+              </select>
+              <select id="logsLimit" defaultValue="500">
+                <option value="200">200 строк</option>
+                <option value="500">500 строк</option>
+                <option value="1000">1000 строк</option>
+              </select>
+            </div>
+            <p className="meta" id="logsMeta">
+              Логи не загружены.
+            </p>
             <pre id="logOutput">Логи не загружены.</pre>
           </section>
         </section>

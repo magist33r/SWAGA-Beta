@@ -57,6 +57,12 @@ function getRuntimeDir() {
   return process.pkg ? path.dirname(process.execPath) : process.cwd();
 }
 
+function buildCfToolsProfileUrl(steam64) {
+  return `https://app.cftools.cloud/profile/${encodeURIComponent(
+    String(steam64 || '').trim()
+  )}`;
+}
+
 const CONFIG_PATH = path.resolve(process.cwd(), 'config.json');
 const BOT_DB_PATH = path.resolve(getRuntimeDir(), 'bot-db.json');
 
@@ -64,6 +70,26 @@ const MEDIA_ROLE_NAME = 'media';
 const MEMBER_ROLE_NAMES = [':white_check_mark:', '✅'];
 const EVERYONE_TIMEOUT_SECONDS = 3600;
 const EVERYONE_DELETE_HOURS = 1;
+const SPECIAL_VIP_ROLE_RULES = [
+  {
+    roleName: '💎 Donator',
+    strippedMessageKey: 'dmDonatorRoleStripped',
+    grantedMessageKey: 'dmDonatorRoleGranted',
+  },
+  {
+    roleName: '🥶 Platinum Donator',
+    strippedMessageKey: 'dmPlatinumRoleStripped',
+    grantedMessageKey: 'dmPlatinumRoleGranted',
+  },
+  {
+    roleName: 'духарной кентик',
+    strippedMessageKey: 'dmHomieRoleStripped',
+    grantedMessageKey: 'dmHomieRoleGranted',
+  },
+];
+const SPECIAL_VIP_ROLE_RULES_BY_NAME = new Map(
+  SPECIAL_VIP_ROLE_RULES.map((entry) => [String(entry.roleName || '').trim().toLowerCase(), entry])
+);
 
 const MESSAGES_RU = {
   dmVipActiveForever: '👑 **VIP активирован навсегда** — {tariff} ⭐\n\nДобро пожаловать в элиту SWAGA. Тебе доступны эксклюзивные скины, уникальные пушки и приоритетный вход — на обоих серверах.\n\n🎮 Заходи и доминируй.',
@@ -76,6 +102,12 @@ const MESSAGES_RU = {
   dmVipExpired:
     '😔 **VIP закончился** — {tariff}\n\nТвои эксклюзивные скины и пушки недоступны. Другие игроки с VIP выглядят лучше тебя прямо сейчас.\n\n⚡ Продли в течение **24 часов** — получи скидку:\n💳 **399₽**/14 дней • ~~799₽~~ **699₽**/месяц • ~~1799₽~~ **1599₽**/навсегда\n\n👉 **[Вернуть VIP со скидкой](<https://discord.com/channels/1348440636885438634/1350468455157203058>)**',
   dmVipRemoved: '❌ **VIP снят**\nПричина: {reason}\n\n👉 Если считаешь это ошибкой — **[создай тикет](<https://discord.com/channels/1348440636885438634/1350468455157203058>)**',
+  dmDonatorRoleStripped: '💎 **Ты один из тех, кто делает SWAGA тем, чем он является.**\n\nDiscord VIP-роль снята — она просто больше не нужна. В игре всё твоё на месте.\nСпасибо, что с нами. 🖤\n\n👉 Вопросы? **[Создай тикет](<https://discord.com/channels/1348440636885438634/1350468455157203058>)**',
+  dmPlatinumRoleStripped: '🥶 **Platinum — ты вложил в SWAGA больше, чем большинство.**\n\nDiscord VIP-роль снята автоматически, но в игре ничего не изменилось — всё твоё.\nОт всей команды — искренне спасибо. 🖤\n\n👉 Вопросы? **[Создай тикет](<https://discord.com/channels/1348440636885438634/1350468455157203058>)**',
+  dmHomieRoleStripped: '🤙 **Братан, ты духарной кентик — таких мало.**\n\nDiscord VIP убрали автоматически, но в игре ничего не тронули — всё как было.\nРады что ты с нами. 🖤\n\n👉 Вопросы? **[Создай тикет](<https://discord.com/channels/1348440636885438634/1350468455157203058>)**',
+  dmDonatorRoleGranted: '💎 **Ты теперь донатёр SWAGA — и это не просто роль.**\n\nТы вкладываешь в сервер, и мы это ценим.\nСпасибо, что с нами. 🖤',
+  dmPlatinumRoleGranted: '🥶 **Platinum. Ты вложил в SWAGA больше, чем большинство — и мы это помним.**\n\nДобро пожаловать на высший уровень.\nОт всей команды — искренне спасибо. 🖤',
+  dmHomieRoleGranted: '🤙 **Духарной кентик — это не просто роль, это свои люди.**\n\nТы здесь потому что мы играли вместе, и ты свой.\nРады что ты с нами. 🖤',
   vipRemoveReasonRoleRemoved: 'VIP-роль снята вручную.',
   vipRemoveReasonAdmin: 'Снят администратором {admin}.',
   vipRemoveReasonApi: 'Снят через API.',
@@ -158,6 +190,12 @@ const MESSAGES_EN = {
   dmVipExpired:
     '😔 **VIP expired** — {tariff}\n\nYour exclusive skins and weapons are gone. Other VIP players are outclassing you right now.\n\n⚡ Renew within **24 hours** and get a discount:\n💳 **$4.99**/14 days • ~~$10.50~~ **$8.99**/month • ~~$23.50~~ **$19.99**/lifetime\n\n👉 **[Get VIP back at a discount](<https://discord.com/channels/1348440636885438634/1350468455157203058>)**',
   dmVipRemoved: '❌ **VIP removed**\nReason: {reason}\n\n👉 If you think this is a mistake — **[open a ticket](<https://discord.com/channels/1348440636885438634/1350468455157203058>)**',
+  dmDonatorRoleStripped: '💎 **You\'re one of the people who makes SWAGA what it is.**\n\nYour Discord VIP role has been removed — it\'s simply no longer needed. Everything in-game is still yours.\nThank you for being with us. 🖤\n\n👉 Questions? **[Open a ticket](<https://discord.com/channels/1348440636885438634/1350468455157203058>)**',
+  dmPlatinumRoleStripped: '🥶 **Platinum — you\'ve put more into SWAGA than most.**\n\nYour Discord VIP role was removed automatically, but nothing changed in-game — everything is still yours.\nFrom the whole team — thank you, sincerely. 🖤\n\n👉 Questions? **[Open a ticket](<https://discord.com/channels/1348440636885438634/1350468455157203058>)**',
+  dmHomieRoleStripped: '🤙 **Bro, you\'re a real one — not many like you.**\n\nDiscord VIP was removed automatically, but nothing was touched in-game — everything\'s as it was.\nGlad to have you with us. 🖤\n\n👉 Questions? **[Open a ticket](<https://discord.com/channels/1348440636885438634/1350468455157203058>)**',
+  dmDonatorRoleGranted: '💎 **You\'re now a SWAGA Donator — and that\'s not just a role.**\n\nYou invest in the server, and we appreciate it.\nThank you for being with us. 🖤',
+  dmPlatinumRoleGranted: '🥶 **Platinum. You\'ve put more into SWAGA than most — and we remember that.**\n\nWelcome to the top tier.\nFrom the whole team — thank you, sincerely. 🖤',
+  dmHomieRoleGranted: '🤙 **Духарной кентик — it\'s not just a role, it\'s your people.**\n\nYou\'re here because we\'ve played together, and you\'re one of us.\nGlad to have you with us. 🖤',
   vipRemoveReasonRoleRemoved: 'VIP role was removed manually.',
   vipRemoveReasonAdmin: 'Removed by administrator {admin}.',
   vipRemoveReasonApi: 'Removed via API.',
@@ -250,6 +288,7 @@ const AUDIT_LABELS_RU = {
   manual_remove: 'VIP снят',
   expire_remove: 'VIP истек',
   expire_warn: 'Предупреждение об истечении',
+  dm_sent: 'DM отправлен',
   link_set: 'Привязка сохранена',
   link_remove: 'Привязка удалена',
   media_add: 'Media выдан',
@@ -272,6 +311,7 @@ const AUDIT_LABELS_EN = {
   manual_remove: 'VIP removed',
   expire_remove: 'VIP expired',
   expire_warn: 'Expiration warning',
+  dm_sent: 'DM sent',
   link_set: 'Link set',
   link_remove: 'Link removed',
   media_add: 'Media granted',
@@ -442,6 +482,7 @@ const {
   TICKETPANEL_COMMAND,
   CLOSE_TICKET_COMMAND,
   DELETE_TICKET_COMMAND,
+  PAYMENT_COMMAND,
 } = createTicketCommands({
   SlashCommandBuilder,
   PermissionFlagsBits,
@@ -473,6 +514,7 @@ const AUDIT_ACTIONS = new Set([
   'manual_remove',
   'expire_remove',
   'expire_warn',
+  'dm_sent',
   'link_set',
   'link_remove',
   'media_add',
@@ -524,6 +566,7 @@ const vipModule = createVipModule({
   VIP_ROLES,
   VIP_ROLE_NAMES,
   GIVEAWAY_VIP_ROLE_NAME,
+  SPECIAL_VIP_ROLE_RULES,
   MEDIA_ROLE_NAME,
   ROLE_REMOVE_REASON,
   NOTIFY_THRESHOLDS,
@@ -555,11 +598,13 @@ const {
   buildVipEmbed,
   notifyVipRemoved,
   removeDiscordVipRoles,
+  reconcileLinkedMemberAccess,
   runExpirationCheck,
   handleProfileCommand,
   handleServerInfoCommand,
   handleVipRoleAdded,
   handleVipRoleRemoved,
+  handleSpecialVipRoleAdded,
   handleMediaRoleAdded,
   handleMediaRoleRemoved,
 } = vipModule;
@@ -593,6 +638,7 @@ const ticketsModule = createTicketsModule({
   savePrimaryDb,
   clearInvalidLink: (discordId) => invalidLinks.delete(discordId),
   buildCfToolsProfileUrl,
+  reconcileLinkedMemberAccess,
 });
 
 const {
@@ -603,6 +649,7 @@ const {
   handleTicketDeleteCommand,
   handleTicketOwnerFirstMessage,
   runTicketInactivityCheck,
+  handlePaymentCommand,
 } = ticketsModule;
 
 const giveawayModule = createGiveawayModule({
@@ -1223,6 +1270,32 @@ function pickBestRole(roleNames) {
     }
   }
   return best;
+}
+
+function normalizeRoleName(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function resolveSpecialVipRoleRule(roleName) {
+  if (!roleName) {
+    return null;
+  }
+  return SPECIAL_VIP_ROLE_RULES_BY_NAME.get(normalizeRoleName(roleName)) || null;
+}
+
+function findActiveSpecialVipRole(roleNames) {
+  if (!roleNames) {
+    return null;
+  }
+  const normalized = new Set(
+    [...roleNames].map((roleName) => normalizeRoleName(roleName)).filter(Boolean)
+  );
+  for (const rule of SPECIAL_VIP_ROLE_RULES) {
+    if (normalized.has(normalizeRoleName(rule.roleName))) {
+      return rule.roleName;
+    }
+  }
+  return null;
 }
 
 function markRoleSkip(discordId, roleName) {
@@ -2403,10 +2476,38 @@ function findDiscordIdBySteam(steam64) {
   return null;
 }
 
+function summarizeDmPayload(payload) {
+  const content =
+    payload && Object.prototype.hasOwnProperty.call(payload, 'content')
+      ? String(payload.content || '').trim()
+      : '';
+  const embeds = Array.isArray(payload?.embeds) ? payload.embeds.length : 0;
+  const files = Array.isArray(payload?.files) ? payload.files.length : 0;
+  const components = Array.isArray(payload?.components) ? payload.components.length : 0;
+  const preview = content ? content.replace(/\s+/g, ' ').slice(0, 120) : '';
+  const parts = [
+    `content=${content ? 1 : 0}`,
+    `embeds=${embeds}`,
+    `files=${files}`,
+    `components=${components}`,
+  ];
+  if (preview) {
+    parts.push(`preview=${preview}`);
+  }
+  return parts.join(';');
+}
+
 async function sendDm(member, payload) {
   const message = typeof payload === 'string' ? { content: payload } : payload;
   try {
     await member.send(message);
+    await logAction('dm_sent', {
+      discordId: member.id,
+      steam64: db?.links?.[member.id] || null,
+      roleName: null,
+      expiresAt: null,
+      note: summarizeDmPayload(message),
+    });
   } catch (err) {
     await logAction('dm_fail', {
       discordId: member.id,
@@ -2423,6 +2524,13 @@ async function sendDmToUserId(discordId, payload) {
   try {
     const user = await client.users.fetch(discordId);
     await user.send(message);
+    await logAction('dm_sent', {
+      discordId,
+      steam64: db?.links?.[discordId] || null,
+      roleName: null,
+      expiresAt: null,
+      note: summarizeDmPayload(message),
+    });
   } catch (err) {
     await logAction('dm_fail', {
       discordId,
@@ -2639,6 +2747,41 @@ async function handleMemberLeave(member) {
       expiresAt: 0,
       note: 'member_left_discord',
     });
+  }
+}
+
+async function runSpecialVipRoleReconcile() {
+  if (!db || !primaryGuild || SPECIAL_VIP_ROLE_RULES.length === 0) {
+    return;
+  }
+
+  const linkedDiscordIds = Object.keys(db.links || {});
+  if (linkedDiscordIds.length === 0) {
+    return;
+  }
+
+  let checkedMembers = 0;
+  let matchedSpecialRoles = 0;
+  for (const discordId of linkedDiscordIds) {
+    const member = await fetchGuildMember(discordId);
+    if (!member) {
+      continue;
+    }
+    checkedMembers += 1;
+
+    const specialRoleName = findActiveSpecialVipRole(member.roles.cache.map((role) => role.name));
+    if (!specialRoleName) {
+      continue;
+    }
+
+    matchedSpecialRoles += 1;
+    await handleSpecialVipRoleAdded(member, specialRoleName);
+  }
+
+  if (matchedSpecialRoles > 0) {
+    console.log(
+      `[special-vip] reconcile checked=${checkedMembers} matched=${matchedSpecialRoles}`
+    );
   }
 }
 
@@ -3011,6 +3154,7 @@ async function registerCommands() {
     TICKETPANEL_COMMAND,
     CLOSE_TICKET_COMMAND,
     DELETE_TICKET_COMMAND,
+    PAYMENT_COMMAND,
   ];
   for (const command of buildLeaderboardSlashCommands()) {
     if (commandBuilders.some((entry) => entry.name === command.name)) {
@@ -3045,7 +3189,9 @@ client.once('clientReady', async () => {
   }
 
   await enqueueOperation(runStartupReconcile);
+  await enqueueOperation(runSpecialVipRoleReconcile);
   await enqueueOperation(runExpirationCheck);
+  setInterval(() => enqueueOperation(runSpecialVipRoleReconcile), CHECK_INTERVAL_MS);
   setInterval(() => enqueueOperation(runExpirationCheck), CHECK_INTERVAL_MS);
   await enqueueOperation(runTicketInactivityCheck);
   setInterval(() => enqueueOperation(runTicketInactivityCheck), TICKET_IDLE_CHECK_INTERVAL_MS);
@@ -3087,6 +3233,7 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
   }
   const oldRoles = new Set(oldMember.roles.cache.map((role) => role.name));
   const newRoles = new Set(newMember.roles.cache.map((role) => role.name));
+  const activeSpecialVipRole = findActiveSpecialVipRole(newRoles);
 
   const addedVipRoles = [...newRoles].filter(
     (roleName) => VIP_ROLE_NAMES.has(roleName) && !oldRoles.has(roleName)
@@ -3101,9 +3248,28 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
     (roleName) => !consumeRoleSkip(newMember.id, roleName)
   );
 
+  const addedSpecialVipRoles = [...newRoles].filter(
+    (roleName) => resolveSpecialVipRoleRule(roleName) && !oldRoles.has(roleName)
+  );
+  let specialVipHandled = false;
+  if (addedSpecialVipRoles.length > 0) {
+    const roleName = findActiveSpecialVipRole(addedSpecialVipRoles);
+    if (roleName) {
+      specialVipHandled = true;
+      enqueueOperation(() => handleSpecialVipRoleAdded(newMember, roleName));
+    }
+  }
+
   if (filteredAddedVipRoles.length > 0) {
-    const roleName = pickBestRole(filteredAddedVipRoles);
-    enqueueOperation(() => handleVipRoleAdded(newMember, roleName));
+    if (activeSpecialVipRole) {
+      if (!specialVipHandled) {
+        specialVipHandled = true;
+        enqueueOperation(() => handleSpecialVipRoleAdded(newMember, activeSpecialVipRole));
+      }
+    } else {
+      const roleName = pickBestRole(filteredAddedVipRoles);
+      enqueueOperation(() => handleVipRoleAdded(newMember, roleName));
+    }
   }
 
   const oldRolesLower = new Set([...oldRoles].map((roleName) => roleName.toLowerCase()));
@@ -3120,7 +3286,7 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
   const hasVipAfter = [...newRoles].some(
     (roleName) => VIP_ROLE_NAMES.has(roleName) || roleName === GIVEAWAY_VIP_ROLE_NAME
   );
-  if (filteredRemovedVipRoles.length > 0 && !hasVipAfter) {
+  if (filteredRemovedVipRoles.length > 0 && !hasVipAfter && !activeSpecialVipRole) {
     const roleName = pickBestRole(filteredRemovedVipRoles) || null;
     enqueueOperation(() => handleVipRoleRemoved(newMember, roleName));
   }
@@ -3231,6 +3397,11 @@ client.on('interactionCreate', async (interaction) => {
         return;
       }
       await handleTicketDeleteCommand(interaction, interactionLanguage);
+      return;
+    }
+
+    if (interaction.commandName === 'payment') {
+      await handlePaymentCommand(interaction);
       return;
     }
 
@@ -3377,6 +3548,7 @@ client.on('interactionCreate', async (interaction) => {
           const guildMember = guild ? await guild.members.fetch(discordId).catch(() => null) : null;
           if (guildMember) {
             await assignMemberRole(guildMember);
+            await reconcileLinkedMemberAccess(guildMember, existingLink);
           }
         } catch (err) {
           // Ignore member role assignment errors to not block the command flow.
@@ -3449,6 +3621,7 @@ client.on('interactionCreate', async (interaction) => {
           const guildMember = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
           if (guildMember) {
             await assignMemberRole(guildMember);
+            await reconcileLinkedMemberAccess(guildMember, previous || null);
           }
         } catch (err) {
           // Ignore member role assignment errors to not block the command flow.

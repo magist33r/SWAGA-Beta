@@ -1,35 +1,46 @@
-﻿# VIP GUI
+# VIP GUI
 
-Desktop GUI for managing VIP lists through the bot HTTP API.
+Desktop GUI for managing DayZ VIP entries through the bot HTTP API.
 
-## Setup
-1. Enable the API in `bot/config.json`:
+## Features
+- Connection diagnostics (`/api/health`) with API time, version, latency and last check time.
+- VIP list with search, sorting, status badges and status filters:
+  - `Все`, `Активные`, `Навсегда`, `Истекшие`, `Без Discord`.
+- Inline VIP expiry editor directly in table rows.
+- Statistics panel from `/api/vip/stats` (including links and upcoming expirations).
+- Log viewer from `/api/logs` with:
+  - search,
+  - level filter (`all/error/warn/vip/api`),
+  - selectable line limit.
+- Safer API client: timeout + retry for `GET` requests.
 
-```
+## API Requirements
+Enable API in `bot/config.json`:
+
+```json
 "api": {
   "enabled": true,
   "host": "0.0.0.0",
   "port": 8787,
   "token": "CHANGE_ME",
-  "maxLogLines": 500,
+  "maxLogLines": 1000,
   "maxPageSize": 100
 }
 ```
 
-2. Open the API port on the server firewall (e.g. 8787).
-3. Install and run the GUI:
-
-```
+## Run Locally
+```bash
 cd gui
 npm install
 npm start
 ```
 
-4. In the GUI, set API URL (e.g. `http://SERVER_IP:8787`) and the token.
+Then configure API URL (example: `http://SERVER_IP:8787`) and API token in the GUI.
 
-## Build (.exe)
-```
+## Build Portable EXE
+```bash
 cd gui
 npm run build
 ```
-The portable executable will be in `gui/dist`.
+
+Output artifacts are written to `gui/dist`.

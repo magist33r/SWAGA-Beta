@@ -19,7 +19,7 @@
     "media": {
         "enabled": false,
         "channelIds": [
-            "MEDIA_CHANNEL_ID"
+            "1394843481918144636"
         ],
         "notifyOnDelete": true,
         "announceAuthor": true,
@@ -27,23 +27,23 @@
         "dislikeEmoji": "👎"
     },
     "status": {
-        "enabled": false,
+        "enabled": true,
         "text": "SWAGA Deathmatch",
         "type": "playing"
     },
     "welcome": {
         "enabled": false,
-        "channelId": "WELCOME_CHANNEL_ID",
-        "rulesChannelId": "RULES_CHANNEL_ID",
+        "channelId": "1348443227396509827",
+        "rulesChannelId": "1357861095590723675",
         "infoChannelId": "INFO_CHANNEL_ID",
-        "donateChannelId": "DONATE_CHANNEL_ID",
+        "donateChannelId": "1349738530271789129",
         "projectName": "SWAGA",
         "titlePrefix": "👋 Добро пожаловать",
         "color": 15158332
     },
     "logs": {
-        "enabled": false,
-        "channelId": "LOG_CHANNEL_ID",
+        "enabled": true,
+        "channelId": "1487809995012702208",
         "includeVoice": true,
         "includeMessages": true
     },

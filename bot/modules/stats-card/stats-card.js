@@ -110,7 +110,7 @@ const TEXT_RU = {
     notConfigured: '⚠️ Статистика не настроена. Заполните блок "stats" в config.json.',
     badSteam: '❌ Неверный SteamID64. Нужны 17 цифр, начиная с 7656119.',
     invalidServer: '❌ Сервер "{server}" не найден. Доступно: {servers}.',
-    noStats: '❌ Статистика для этого игрока не найдена.',
+    noStats: '❌ Не удалось получить статистику для этого SteamID. Убедитесь, что игрок играл на сервере.',
     noPlayer: '❌ Игрок не найден в CFTools.',
     fetchError: '⚠️ Не удалось получить статистику. Попробуйте позже.',
   },
@@ -1343,7 +1343,7 @@ class StatsCard {
       return;
     }
 
-    await interaction.deferReply();
+    await interaction.deferReply({ ephemeral: true });
 
     try {
       const avatarPromise = fetchSteamAvatarBuffer(steam64, this.steamApiKey);
